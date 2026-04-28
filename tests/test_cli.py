@@ -53,3 +53,27 @@ def test_main_dispatch_prints_json_summary(tmp_path: Path, monkeypatch):
     assert exit_code == 0
     assert payload["accepted"] is True
     assert payload["summary"] == "accepted Inspect the repository"
+
+
+def test_agents_list_prints_configured_profiles():
+    stdout = StringIO()
+
+    with redirect_stdout(stdout):
+        exit_code = main(["agents", "list"])
+
+    payload = json.loads(stdout.getvalue())
+    assert exit_code == 0
+    assert payload["agents"][0]["name"] == "claude"
+    assert payload["agents"][0]["adapter"] == "claude-cli"
+
+
+def test_doctor_reports_python_and_claude_checks():
+    stdout = StringIO()
+
+    with redirect_stdout(stdout):
+        exit_code = main(["doctor"])
+
+    payload = json.loads(stdout.getvalue())
+    assert exit_code == 0
+    assert payload["python"]["ok"] is True
+    assert "claude_cli" in payload
