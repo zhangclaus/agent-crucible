@@ -425,6 +425,7 @@ def test_claude_bridge_commands_route_to_bridge(tmp_path: Path, monkeypatch):
                 "readonly",
                 "--visual",
                 "log",
+                "--supervised",
             ]
         )
     start_payload = json.loads(stdout.getvalue())
@@ -454,14 +455,92 @@ def test_claude_bridge_commands_route_to_bridge(tmp_path: Path, monkeypatch):
         list_exit = main(["claude", "bridge", "list", "--repo", str(repo_root)])
     list_payload = json.loads(stdout.getvalue())
 
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        status_exit = main(["claude", "bridge", "status", "--repo", str(repo_root)])
+    status_payload = json.loads(stdout.getvalue())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        verify_exit = main(
+            [
+                "claude",
+                "bridge",
+                "verify",
+                "--repo",
+                str(repo_root),
+                "--command",
+                "pytest -q",
+            ]
+        )
+    verify_payload = json.loads(stdout.getvalue())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        challenge_exit = main(
+            [
+                "claude",
+                "bridge",
+                "challenge",
+                "--repo",
+                str(repo_root),
+                "--summary",
+                "missing verification",
+                "--repair-goal",
+                "run pytest",
+                "--send",
+            ]
+        )
+    challenge_payload = json.loads(stdout.getvalue())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        accept_exit = main(
+            [
+                "claude",
+                "bridge",
+                "accept",
+                "--repo",
+                str(repo_root),
+                "--summary",
+                "accepted",
+            ]
+        )
+    accept_payload = json.loads(stdout.getvalue())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        needs_human_exit = main(
+            [
+                "claude",
+                "bridge",
+                "needs-human",
+                "--repo",
+                str(repo_root),
+                "--summary",
+                "need input",
+            ]
+        )
+    needs_human_payload = json.loads(stdout.getvalue())
+
     assert start_exit == 0
     assert send_exit == 0
     assert tail_exit == 0
     assert list_exit == 0
+    assert status_exit == 0
+    assert verify_exit == 0
+    assert challenge_exit == 0
+    assert accept_exit == 0
+    assert needs_human_exit == 0
     assert start_payload["bridge"]["bridge_id"] == "bridge-cli"
     assert send_payload["latest_turn"]["message"] == "继续"
     assert tail_payload["turns"][0]["turn_id"] == "turn-cli"
     assert list_payload["bridges"][0]["bridge_id"] == "bridge-cli"
+    assert status_payload["status"] == "supervised"
+    assert verify_payload["verification"]["command"] == "pytest -q"
+    assert challenge_payload["challenge"]["repair_goal"] == "run pytest"
+    assert accept_payload["accepted"] is True
+    assert needs_human_payload["needs_human"] is True
     assert fake_bridge.calls == [
         {
             "method": "start",
@@ -470,6 +549,7 @@ def test_claude_bridge_commands_route_to_bridge(tmp_path: Path, monkeypatch):
             "workspace_mode": "readonly",
             "visual": "log",
             "dry_run": False,
+            "supervised": True,
         },
         {
             "method": "send",
@@ -485,6 +565,34 @@ def test_claude_bridge_commands_route_to_bridge(tmp_path: Path, monkeypatch):
             "limit": 1,
         },
         {"method": "list", "repo_root": repo_root.resolve()},
+        {"method": "status", "repo_root": repo_root.resolve(), "bridge_id": None},
+        {
+            "method": "verify",
+            "repo_root": repo_root.resolve(),
+            "bridge_id": None,
+            "command": "pytest -q",
+            "turn_id": None,
+        },
+        {
+            "method": "challenge",
+            "repo_root": repo_root.resolve(),
+            "bridge_id": None,
+            "summary": "missing verification",
+            "repair_goal": "run pytest",
+            "send": True,
+        },
+        {
+            "method": "accept",
+            "repo_root": repo_root.resolve(),
+            "bridge_id": None,
+            "summary": "accepted",
+        },
+        {
+            "method": "needs_human",
+            "repo_root": repo_root.resolve(),
+            "bridge_id": None,
+            "summary": "need input",
+        },
     ]
 
 
@@ -679,6 +787,26 @@ class FakeClaudeBridge:
     def list(self, **kwargs):
         self.calls.append({"method": "list", **kwargs})
         return [{"bridge_id": "bridge-cli"}]
+
+    def status(self, **kwargs):
+        self.calls.append({"method": "status", **kwargs})
+        return {"status": "supervised", "bridge_id": kwargs["bridge_id"]}
+
+    def verify(self, **kwargs):
+        self.calls.append({"method": "verify", **kwargs})
+        return {"verification": {"command": kwargs["command"], "turn_id": kwargs["turn_id"]}}
+
+    def challenge(self, **kwargs):
+        self.calls.append({"method": "challenge", **kwargs})
+        return {"challenge": {"summary": kwargs["summary"], "repair_goal": kwargs["repair_goal"]}}
+
+    def accept(self, **kwargs):
+        self.calls.append({"method": "accept", **kwargs})
+        return {"accepted": True, "summary": kwargs["summary"]}
+
+    def needs_human(self, **kwargs):
+        self.calls.append({"method": "needs_human", **kwargs})
+        return {"needs_human": True, "summary": kwargs["summary"]}
 
 
 class FakeWorkerResult:

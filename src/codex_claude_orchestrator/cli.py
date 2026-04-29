@@ -146,6 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Open an append-only bridge log watcher",
     )
     claude_bridge_start.add_argument("--dry-run", action="store_true")
+    claude_bridge_start.add_argument("--supervised", action="store_true")
     claude_bridge_send = claude_bridge_subparsers.add_parser("send", help="Send a follow-up to a Claude bridge")
     claude_bridge_send.add_argument("--repo", required=True)
     claude_bridge_send.add_argument("--bridge-id", required=False)
@@ -157,6 +158,31 @@ def build_parser() -> argparse.ArgumentParser:
     claude_bridge_tail.add_argument("--limit", type=int, default=5)
     claude_bridge_list = claude_bridge_subparsers.add_parser("list", help="List Claude bridges")
     claude_bridge_list.add_argument("--repo", required=True)
+    claude_bridge_status = claude_bridge_subparsers.add_parser("status", help="Show supervised bridge status")
+    claude_bridge_status.add_argument("--repo", required=True)
+    claude_bridge_status.add_argument("--bridge-id", required=False)
+    claude_bridge_verify = claude_bridge_subparsers.add_parser("verify", help="Run supervised bridge verification")
+    claude_bridge_verify.add_argument("--repo", required=True)
+    claude_bridge_verify.add_argument("--bridge-id", required=False)
+    claude_bridge_verify.add_argument("--turn-id", required=False)
+    claude_bridge_verify.add_argument("--command", required=True)
+    claude_bridge_challenge = claude_bridge_subparsers.add_parser("challenge", help="Record a Codex bridge challenge")
+    claude_bridge_challenge.add_argument("--repo", required=True)
+    claude_bridge_challenge.add_argument("--bridge-id", required=False)
+    claude_bridge_challenge.add_argument("--summary", required=True)
+    claude_bridge_challenge.add_argument("--repair-goal", required=True)
+    claude_bridge_challenge.add_argument("--send", action="store_true")
+    claude_bridge_accept = claude_bridge_subparsers.add_parser("accept", help="Accept a supervised bridge")
+    claude_bridge_accept.add_argument("--repo", required=True)
+    claude_bridge_accept.add_argument("--bridge-id", required=False)
+    claude_bridge_accept.add_argument("--summary", required=True)
+    claude_bridge_needs_human = claude_bridge_subparsers.add_parser(
+        "needs-human",
+        help="Mark a supervised bridge as needing human review",
+    )
+    claude_bridge_needs_human.add_argument("--repo", required=True)
+    claude_bridge_needs_human.add_argument("--bridge-id", required=False)
+    claude_bridge_needs_human.add_argument("--summary", required=True)
 
     term = subparsers.add_parser("term", help="Manage tmux terminal consoles")
     term_subparsers = term.add_subparsers(dest="term_command", required=True)
@@ -215,7 +241,18 @@ def build_claude_window_launcher() -> ClaudeWindowLauncher:
 
 
 def build_claude_bridge(repo_root: Path) -> ClaudeBridge:
-    return ClaudeBridge(repo_root / ".orchestrator")
+    state_root = repo_root / ".orchestrator"
+    session_recorder = SessionRecorder(state_root)
+    return ClaudeBridge(
+        state_root,
+        session_recorder=session_recorder,
+        verification_runner=VerificationRunner(
+            repo_root=repo_root,
+            session_recorder=session_recorder,
+            policy_gate=PolicyGate(),
+        ),
+        result_evaluator=ResultEvaluator(),
+    )
 
 
 def run_doctor(registry: AgentRegistry) -> dict[str, object]:
@@ -238,19 +275,20 @@ def run_doctor(registry: AgentRegistry) -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    root_command = resolve_root_command(args)
     registry = AgentRegistry.default()
 
-    if args.command == "agents":
+    if root_command == "agents":
         if args.agent_command == "list":
             print(json.dumps({"agents": [profile.to_dict() for profile in registry.list_profiles()]}, ensure_ascii=False))
             return 0
         raise ValueError(f"Unsupported agents command: {args.agent_command}")
 
-    if args.command == "doctor":
+    if root_command == "doctor":
         print(json.dumps(run_doctor(registry), ensure_ascii=False))
         return 0
 
-    if args.command == "claude":
+    if root_command == "claude":
         if args.claude_command == "open":
             launch = build_claude_window_launcher().open(
                 repo_root=Path(args.repo).resolve(),
@@ -273,6 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             workspace_mode=args.workspace_mode,
                             visual=args.visual,
                             dry_run=args.dry_run,
+                            supervised=args.supervised,
                         ),
                         ensure_ascii=False,
                     )
@@ -306,13 +345,64 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.claude_bridge_command == "list":
                 print(json.dumps({"bridges": bridge.list(repo_root=repo_root)}, ensure_ascii=False))
                 return 0
+            if args.claude_bridge_command == "status":
+                print(
+                    json.dumps(
+                        bridge.status(repo_root=repo_root, bridge_id=args.bridge_id),
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.claude_bridge_command == "verify":
+                print(
+                    json.dumps(
+                        bridge.verify(
+                            repo_root=repo_root,
+                            bridge_id=args.bridge_id,
+                            command=args.command,
+                            turn_id=args.turn_id,
+                        ),
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.claude_bridge_command == "challenge":
+                print(
+                    json.dumps(
+                        bridge.challenge(
+                            repo_root=repo_root,
+                            bridge_id=args.bridge_id,
+                            summary=args.summary,
+                            repair_goal=args.repair_goal,
+                            send=args.send,
+                        ),
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.claude_bridge_command == "accept":
+                print(
+                    json.dumps(
+                        bridge.accept(repo_root=repo_root, bridge_id=args.bridge_id, summary=args.summary),
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.claude_bridge_command == "needs-human":
+                print(
+                    json.dumps(
+                        bridge.needs_human(repo_root=repo_root, bridge_id=args.bridge_id, summary=args.summary),
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
             raise ValueError(f"Unsupported claude bridge command: {args.claude_bridge_command}")
         raise ValueError(f"Unsupported claude command: {args.claude_command}")
 
-    if args.command == "term":
+    if root_command == "term":
         return handle_term_command(args, registry)
 
-    if args.command == "runs":
+    if root_command == "runs":
         recorder = RunRecorder(Path(args.repo).resolve() / ".orchestrator")
         if args.run_command == "list":
             print(json.dumps({"runs": recorder.list_runs()}, ensure_ascii=False))
@@ -322,7 +412,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         raise ValueError(f"Unsupported runs command: {args.run_command}")
 
-    if args.command == "session":
+    if root_command == "session":
         if args.session_command == "start":
             repo_root = Path(args.repo).resolve()
             workspace_mode = WorkspaceMode(args.workspace_mode)
@@ -346,7 +436,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         raise ValueError(f"Unsupported session command: {args.session_command}")
 
-    if args.command == "sessions":
+    if root_command == "sessions":
         recorder = SessionRecorder(Path(args.repo).resolve() / ".orchestrator")
         if args.sessions_command == "list":
             print(json.dumps({"sessions": recorder.list_sessions()}, ensure_ascii=False))
@@ -356,7 +446,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         raise ValueError(f"Unsupported sessions command: {args.sessions_command}")
 
-    if args.command == "skills":
+    if root_command == "skills":
         from codex_claude_orchestrator.models import SkillStatus
 
         evolution = SkillEvolution(Path(args.repo).resolve() / ".orchestrator")
@@ -380,7 +470,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         raise ValueError(f"Unsupported skills command: {args.skills_command}")
 
-    if args.command == "ui":
+    if root_command == "ui":
         result = run_ui_server(
             repo_root=Path(args.repo).resolve(),
             host=args.host,
@@ -390,8 +480,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(result, ensure_ascii=False))
         return 0
 
-    if args.command != "dispatch":
-        raise ValueError(f"Unsupported command: {args.command}")
+    if root_command != "dispatch":
+        raise ValueError(f"Unsupported command: {root_command}")
 
     repo_root = Path(args.repo).resolve()
     workspace_mode = WorkspaceMode(args.workspace_mode)
@@ -416,6 +506,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     outcome = supervisor.dispatch(task, repo_root)
     print(json.dumps(outcome.to_dict(), ensure_ascii=False))
     return 0
+
+
+def resolve_root_command(args: argparse.Namespace) -> str:
+    for attr, command in (
+        ("agent_command", "agents"),
+        ("run_command", "runs"),
+        ("session_command", "session"),
+        ("sessions_command", "sessions"),
+        ("skills_command", "skills"),
+        ("claude_command", "claude"),
+        ("term_command", "term"),
+    ):
+        if getattr(args, attr, None) is not None:
+            return command
+    return args.command
 
 
 def handle_term_command(args, registry: AgentRegistry) -> int:
