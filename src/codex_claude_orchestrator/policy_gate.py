@@ -57,6 +57,10 @@ class PolicyGate:
         if env_wrapper:
             return PolicyDecision(allowed=False, reason=f"blocked command wrapper: {env_wrapper}")
 
+        env_git_config = self._blocked_env_git_config_wrapper(command)
+        if env_git_config:
+            return PolicyDecision(allowed=False, reason=f"blocked command prefix: {env_git_config}")
+
         effective_command = self._effective_command(command)
         blocked_destructive_command = self._blocked_destructive_command(effective_command)
         if blocked_destructive_command:
@@ -214,6 +218,31 @@ class PolicyGate:
                 break
             else:
                 return None
+        return None
+
+    def _blocked_env_git_config_wrapper(self, command: list[str]) -> str | None:
+        effective_command = command
+        saw_git_config_assignment = False
+        while effective_command and Path(effective_command[0]).name == "env":
+            for index, arg in enumerate(effective_command[1:], start=1):
+                if arg == "--":
+                    effective_command = effective_command[index + 1 :]
+                    break
+                if self._is_env_assignment(arg):
+                    name = arg.partition("=")[0].upper()
+                    saw_git_config_assignment = saw_git_config_assignment or name.startswith("GIT_CONFIG")
+                    continue
+                effective_command = effective_command[index:]
+                break
+            else:
+                effective_command = []
+
+        if (
+            saw_git_config_assignment
+            and effective_command
+            and Path(effective_command[0]).name == "git"
+        ):
+            return "git config"
         return None
 
     def _is_shell_inline_flag(self, arg: str) -> bool:

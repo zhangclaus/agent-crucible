@@ -223,6 +223,53 @@ def test_guard_command_blocks_git_one_shot_config_commands(command):
 @pytest.mark.parametrize(
     "command",
     [
+        [
+            "env",
+            "GIT_CONFIG_COUNT=1",
+            "GIT_CONFIG_KEY_0=alias.wipe",
+            "GIT_CONFIG_VALUE_0=reset --hard",
+            "git",
+            "wipe",
+        ],
+        [
+            "env",
+            "GIT_CONFIG_COUNT=1",
+            "GIT_CONFIG_KEY_0=alias.scrub",
+            "GIT_CONFIG_VALUE_0=clean -fd",
+            "git",
+            "scrub",
+        ],
+        [
+            "env",
+            "GIT_CONFIG_COUNT=1",
+            "GIT_CONFIG_KEY_0=alias.nuke",
+            "GIT_CONFIG_VALUE_0=!rm -rf x",
+            "git",
+            "nuke",
+        ],
+        [
+            "env",
+            "FOO=bar",
+            "/usr/bin/env",
+            "GIT_CONFIG_COUNT=1",
+            "GIT_CONFIG_KEY_0=alias.wipe",
+            "GIT_CONFIG_VALUE_0=reset --hard",
+            "/usr/bin/git",
+            "wipe",
+        ],
+        ["env", "GIT_CONFIG_GLOBAL=/tmp/evil-gitconfig", "git", "wipe"],
+    ],
+)
+def test_guard_command_blocks_git_config_env_injection(command):
+    decision = PolicyGate().guard_command(command)
+
+    assert decision.allowed is False
+    assert "blocked command prefix" in decision.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         ["env", "FOO=bar", "python3", "-m", "pytest", "-q"],
         ["env", "FOO=bar", "/usr/bin/env", "BAR=baz", "python3", "-m", "pytest", "-q"],
         [".venv/bin/python", "-m", "pytest", "-q"],
