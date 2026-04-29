@@ -1,8 +1,32 @@
-# Adversarial Codex-Agent Session Design
+# Adversarial Codex-Agent Session V2 Design
 
 - Date: 2026-04-29
 - Status: Confirmed in conversation, ready for implementation planning
-- Scope: Extend the existing local orchestrator from one-shot dispatch into a multi-round adversarial demand-service loop with governed skill evolution
+- Version: V2
+- Scope: Build the second version of the local orchestrator: evolve V1 one-shot dispatch into a multi-round adversarial demand-service loop with governed skill evolution
+
+## 0. Version Boundary
+
+V1 is the current local orchestrator foundation:
+
+- single `dispatch` execution
+- Claude Code worker adapter
+- workspace allocation
+- policy gate
+- run recording
+- result evaluation
+- `runs list/show` inspection
+
+V2 is the next capability layer on top of V1:
+
+- requirement-level sessions
+- multi-round adversarial execution
+- demand-side verification and challenge generation
+- final hard verification
+- Hermes-inspired skill evolution
+- future visual process UI
+
+V2 should reuse V1's dispatch, adapter, workspace, policy, and run recorder paths instead of replacing them.
 
 ## 1. Problem Statement
 
@@ -26,7 +50,7 @@ Use a Codex-to-Agent abstraction:
 - The first concrete worker remains the existing Claude Code adapter.
 - A later Codex adapter can be added without changing the session model.
 
-The first version should implement a full automatic multi-round loop with bounded control:
+The V2 initial implementation should provide a full automatic multi-round loop with bounded control:
 
 ```text
 specify
@@ -58,12 +82,12 @@ Skill learning follows a Hermes-inspired model: sessions can generate skill cand
 
 ## 4. Non-Goals
 
-- No model fine-tuning in the first version.
+- No model fine-tuning in V2.
 - No hosted SaaS control plane.
 - No uncontrolled peer-to-peer agent mesh.
 - No automatic promotion of generated skills into active runtime behavior without validation.
-- No guarantee that the first version can directly launch another Codex App instance as a worker.
-- No complex real-time streaming UI in the first implementation step.
+- No guarantee that V2 can directly launch another Codex App instance as a worker.
+- No complex real-time streaming UI in the V2 initial implementation step.
 
 ## 5. References Borrowed From Hermes
 
@@ -101,7 +125,7 @@ The demand side owns the requirement contract and final decision. Its responsibi
 
 ### 6.2 Worker Agent
 
-The worker side executes tasks and responds to challenges. In the first implementation, the worker is Claude Code through the existing adapter. Later, it can be Codex CLI, another Claude profile, Gemini, or an A2A-compatible agent.
+The worker side executes tasks and responds to challenges. In the V2 initial implementation, the worker is Claude Code through the existing adapter. Later, it can be Codex CLI, another Claude profile, Gemini, or an A2A-compatible agent.
 
 The worker responsibilities are:
 
@@ -128,7 +152,7 @@ The session is the new durable object above the existing run model. Existing `Ru
 
 Skill evolution converts repeated or high-value session experience into reusable process knowledge.
 
-The first version should generate candidate skills only at the end of a session, using the full evidence trail. Candidate skills are not active by default.
+V2 should generate candidate skills only at the end of a session, using the full evidence trail. Candidate skills are not active by default.
 
 Lifecycle:
 
@@ -292,7 +316,7 @@ The demand-side Codex builds a requirement contract:
 - generated adversarial checks
 - max rounds
 
-For the first version, this can be deterministic plus prompt-driven:
+For the V2 initial implementation, this can be deterministic plus prompt-driven:
 
 - deterministic defaults for `max_rounds`, workspace mode, and required final verification
 - prompt-compiled criteria and checks stored as structured JSON
@@ -419,7 +443,7 @@ orchestrator skills approve --repo /path/to/repo --skill-id <id>
 orchestrator skills reject --repo /path/to/repo --skill-id <id> --reason "too broad"
 ```
 
-The first implementation can output JSON only. A local UI can be built on the same records later.
+The V2 initial implementation can output JSON only. A local UI can be built on the same records later.
 
 ## 11. UI Direction
 
@@ -431,7 +455,7 @@ The UI should show process, not just stdout:
 - Skill evolution panel showing learning notes and pending skills.
 - Control panel for accepting, retrying, approving skills, or marking human review.
 
-The first implementation does not need the UI. The recorded session format should make the UI straightforward.
+The V2 initial implementation does not need the UI. The recorded session format should make the UI straightforward.
 
 ## 12. Policy and Safety
 
