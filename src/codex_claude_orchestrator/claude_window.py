@@ -141,5 +141,14 @@ class ClaudeWindowLauncher:
 
     def _terminal_open_command(self, script_path: Path) -> list[str]:
         shell_command = shlex.join(["/bin/zsh", str(script_path)])
-        applescript = f'tell application "Terminal" to do script {json.dumps(shell_command)}'
-        return ["osascript", "-e", applescript]
+        return [
+            "osascript",
+            "-e",
+            'tell application "Terminal"',
+            "-e",
+            "activate",
+            "-e",
+            f"do script {json.dumps(shell_command)}",
+            "-e",
+            "end tell",
+        ]

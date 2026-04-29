@@ -41,6 +41,8 @@ def test_claude_window_launcher_creates_prompt_script_and_launches_terminal(tmp_
     assert "script" in script
     assert calls[0][:2] == ["osascript", "-e"]
     assert "tell application \"Terminal\"" in calls[0][2]
+    assert "activate" in calls[0]
+    assert any(part.startswith("do script") for part in calls[0])
 
 
 def test_claude_window_launcher_dry_run_does_not_launch_terminal(tmp_path: Path):
