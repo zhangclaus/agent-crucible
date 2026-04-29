@@ -18,6 +18,7 @@
 - [x] Wire bridge commands into `cli.py`.
 - [x] Add `bridge start --visual terminal` watcher window support.
 - [x] Launch the visual watcher before the first Claude turn blocks.
+- [x] Fail fast if the Terminal watcher cannot be opened.
 - [x] Run targeted tests.
 - [x] Run the full pytest suite.
 - [x] Commit docs, implementation, and tests.

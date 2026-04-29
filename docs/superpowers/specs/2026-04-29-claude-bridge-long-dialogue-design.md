@@ -34,6 +34,8 @@ Each bridge gets:
 
 `readonly` mode passes `--allowedTools Read,Glob,Grep,LS` and prompts Claude not to modify files. `shared` mode keeps Claude's normal permissions and asks it to preserve unrelated user work. The bridge never bypasses Claude permissions.
 
+If a requested Terminal watcher cannot be opened, `start --visual terminal` fails before launching Claude. This avoids the misleading state where Claude is running but no visual window exists.
+
 ## Non-Goals
 
 This version does not implement a background daemon, browser streaming UI, or true isolated worktree allocation. Those can build on the stored bridge session once the visible resume flow is reliable.

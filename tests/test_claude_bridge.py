@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from subprocess import CompletedProcess
+from subprocess import CalledProcessError, CompletedProcess
 
 from codex_claude_orchestrator.claude_bridge import ClaudeBridge
 
@@ -95,6 +95,41 @@ def test_bridge_start_with_terminal_visual_opens_watch_window(tmp_path: Path):
     assert "turns.jsonl" in script
     assert "while true" in script
     assert "result_text" in script
+
+
+def test_bridge_start_with_visual_failure_does_not_start_claude(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    claude_calls = []
+
+    def fake_runner(command, **kwargs):
+        claude_calls.append(list(command))
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    def fake_visual_runner(command, **kwargs):
+        return CompletedProcess(command, 1, stdout="", stderr="operation not permitted")
+
+    bridge = ClaudeBridge(
+        state_root=repo_root / ".orchestrator",
+        runner=fake_runner,
+        visual_runner=fake_visual_runner,
+        bridge_id_factory=lambda: "bridge-visual-fail",
+        turn_id_factory=lambda: "turn-never",
+    )
+
+    try:
+        bridge.start(
+            repo_root=repo_root,
+            goal="检查项目结构",
+            workspace_mode="readonly",
+            visual="terminal",
+        )
+    except CalledProcessError as exc:
+        assert "operation not permitted" in str(exc.stderr)
+    else:
+        raise AssertionError("expected CalledProcessError")
+
+    assert claude_calls == []
 
 
 def test_bridge_send_resumes_existing_claude_session(tmp_path: Path):

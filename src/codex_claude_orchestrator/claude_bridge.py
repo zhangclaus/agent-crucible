@@ -5,7 +5,7 @@ import shlex
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from subprocess import CompletedProcess
+from subprocess import CalledProcessError, CompletedProcess
 from typing import Any
 from uuid import uuid4
 
@@ -289,13 +289,12 @@ class ClaudeBridge:
         if not dry_run:
             result = self._visual_runner(open_command, text=True, capture_output=True, check=False)
             if result.returncode != 0:
-                return {
-                    "mode": "terminal",
-                    "launched": False,
-                    "watch_script_path": str(watch_script_path),
-                    "open_command": open_command,
-                    "error": result.stderr or result.stdout,
-                }
+                raise CalledProcessError(
+                    result.returncode,
+                    result.args,
+                    output=result.stdout,
+                    stderr=result.stderr,
+                )
         return {
             "mode": "terminal",
             "launched": not dry_run,
