@@ -27,7 +27,7 @@ def test_verification_runner_records_passing_command_and_artifacts(tmp_path: Pat
     record = runner.run(
         session_id="session-1",
         turn_id="turn-1",
-        command=f"{sys.executable} -c \"print('verification ok')\"",
+        command=f"{sys.executable} --version",
     )
 
     assert record.session_id == "session-1"
@@ -37,8 +37,10 @@ def test_verification_runner_records_passing_command_and_artifacts(tmp_path: Pat
     assert record.summary == "command passed: exit code 0"
     assert record.stdout_artifact is not None
     assert record.stderr_artifact is not None
-    assert Path(record.stdout_artifact).read_text(encoding="utf-8") == "verification ok\n"
-    assert Path(record.stderr_artifact).read_text(encoding="utf-8") == ""
+    assert "Python" in (
+        Path(record.stdout_artifact).read_text(encoding="utf-8")
+        + Path(record.stderr_artifact).read_text(encoding="utf-8")
+    )
 
     details = recorder.read_session("session-1")
     assert details["verifications"][0]["verification_id"] == record.verification_id
@@ -115,12 +117,40 @@ def test_verification_runner_uses_injected_runner(tmp_path: Path):
     record = runner.run(
         session_id="session-1",
         turn_id="turn-1",
-        command=f"{sys.executable} -c \"print('tmux ok')\"",
+        command=f"{sys.executable} --version",
     )
 
     assert record.passed is True
-    assert calls[0][0][:2] == [sys.executable, "-c"]
+    assert calls[0][0][:2] == [sys.executable, "--version"]
     assert calls[0][1]["cwd"] == tmp_path
     assert calls[0][1]["capture_output"] is True
     assert calls[0][1]["text"] is True
     assert Path(record.stdout_artifact).read_text(encoding="utf-8") == "tmux ok\n"
+
+
+def test_verification_runner_blocks_command_wrapper_without_executing(tmp_path: Path):
+    recorder = SessionRecorder(tmp_path / ".orchestrator")
+    recorder.start_session(
+        SessionRecord(
+            session_id="session-1",
+            root_task_id="task-1",
+            goal="Run blocked verification",
+            assigned_agent="codex",
+        )
+    )
+    runner = VerificationRunner(
+        repo_root=tmp_path,
+        session_recorder=recorder,
+        policy_gate=PolicyGate(),
+    )
+
+    record = runner.run(
+        session_id="session-1",
+        turn_id="turn-1",
+        command="bash -lc 'git reset --hard'",
+    )
+
+    assert record.passed is False
+    assert record.exit_code is None
+    assert record.summary == "command blocked: blocked command wrapper: bash -lc"
+    assert Path(record.stderr_artifact).read_text(encoding="utf-8") == "blocked command wrapper: bash -lc\n"

@@ -334,6 +334,60 @@ def test_bridge_start_supervised_creates_session_and_mirrors_initial_turn(tmp_pa
     assert details["output_traces"][0]["evaluation"]["accepted"] is True
 
 
+def test_bridge_start_supervised_failure_finalizes_linked_session_needs_human(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    recorder = SessionRecorder(repo_root / ".orchestrator")
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        return CompletedProcess(
+            command,
+            7,
+            stdout='{"type":"result","session_id":"claude-session-1","result":"失败。"}',
+            stderr="boom",
+        )
+
+    bridge = ClaudeBridge(
+        state_root=repo_root / ".orchestrator",
+        runner=fake_runner,
+        session_recorder=recorder,
+        bridge_id_factory=lambda: "bridge-start-fail",
+        turn_id_factory=lambda: "turn-start-fail",
+        session_id_factory=lambda: "session-start-fail",
+        task_id_factory=lambda: "task-start-fail",
+        trace_id_factory=lambda: "trace-start-fail",
+    )
+
+    result = bridge.start(
+        repo_root=repo_root,
+        goal="实现功能",
+        workspace_mode="shared",
+        supervised=True,
+    )
+
+    assert result["bridge"]["status"] == "failed"
+    details = recorder.read_session("session-start-fail")
+    assert details["session"]["status"] == "needs_human"
+    assert details["final_report"]["status"] == "needs_human"
+    assert (
+        "Claude start turn failed" in details["final_report"]["final_summary"]
+        or "non-zero" in details["final_report"]["final_summary"]
+    )
+    assert details["turns"][0]["turn_id"] == "turn-start-fail"
+    assert details["output_traces"][0]["turn_id"] == "turn-start-fail"
+
+    try:
+        bridge.send(repo_root=repo_root, bridge_id=None, message="继续")
+    except ValueError as exc:
+        assert "already finalized" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+    assert len(calls) == 1
+
+
 def test_bridge_send_supervised_mirrors_follow_up_turn_in_session_round_one(tmp_path: Path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()

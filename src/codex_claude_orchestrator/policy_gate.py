@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from codex_claude_orchestrator.models import PolicyDecision, WorkspaceAllocation, WorkspaceMode
 
 
@@ -57,4 +59,30 @@ class PolicyGate:
                     allowed=False,
                     reason=f"blocked command prefix: {' '.join(blocked_prefix)}",
                 )
+        wrapper = self._blocked_wrapper(command)
+        if wrapper:
+            return PolicyDecision(allowed=False, reason=f"blocked command wrapper: {wrapper}")
         return PolicyDecision(allowed=True, reason=None)
+
+    def _blocked_wrapper(self, command: list[str]) -> str | None:
+        if len(command) < 2:
+            return None
+
+        executable = Path(command[0]).name
+        flag = command[1]
+        if executable in {"sh", "bash", "zsh"} and flag in {"-c", "-lc"}:
+            return f"{executable} {flag}"
+        if self._is_python_executable(executable) and flag == "-c":
+            return f"{executable} {flag}"
+        if executable == "node" and flag == "-e":
+            return f"{executable} {flag}"
+        if executable in {"ruby", "perl"} and flag == "-e":
+            return f"{executable} {flag}"
+        return None
+
+    def _is_python_executable(self, executable: str) -> bool:
+        if executable in {"python", "python3"}:
+            return True
+        if not executable.startswith("python3."):
+            return False
+        return executable.removeprefix("python3.").isdigit()

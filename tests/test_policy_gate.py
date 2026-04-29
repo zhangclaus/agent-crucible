@@ -52,3 +52,22 @@ def test_guard_write_targets_allows_readonly_when_no_paths_changed(tmp_path: Pat
     decision = gate.guard_write_targets(readonly_allocation, [])
 
     assert decision.allowed is True
+
+
+def test_guard_command_blocks_shell_command_wrappers():
+    bash_decision = PolicyGate().guard_command(["bash", "-lc", "git reset --hard"])
+    sh_decision = PolicyGate().guard_command(["sh", "-c", "rm -rf x"])
+
+    assert bash_decision.allowed is False
+    assert "blocked command wrapper" in bash_decision.reason
+    assert sh_decision.allowed is False
+    assert "blocked command wrapper" in sh_decision.reason
+
+
+def test_guard_command_blocks_interpreter_inline_execution_wrappers():
+    python_decision = PolicyGate().guard_command(["/usr/bin/python3", "-c", "print('x')"])
+    pytest_decision = PolicyGate().guard_command([".venv/bin/python", "-m", "pytest", "-q"])
+
+    assert python_decision.allowed is False
+    assert "blocked command wrapper" in python_decision.reason
+    assert pytest_decision.allowed is True

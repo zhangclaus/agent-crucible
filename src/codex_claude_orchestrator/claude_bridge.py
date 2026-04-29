@@ -124,6 +124,8 @@ class ClaudeBridge:
         record = self._advance_record(record, turn, dry_run=dry_run)
         if record.get("supervised"):
             self._mirror_bridge_turn(record, turn)
+            if turn["returncode"] != 0:
+                self._finalize_failed_start_session(record, turn)
         self._write_record(bridge_id, record)
         return {"bridge": record, "latest_turn": turn, "visual": visual_result}
 
@@ -472,6 +474,18 @@ class ClaudeBridge:
         )
         self._session_recorder.start_session(session)
         return session
+
+    def _finalize_failed_start_session(self, record: dict[str, Any], turn: dict[str, Any]) -> None:
+        summary = f"Claude start turn failed with non-zero exit code {turn['returncode']}."
+        stderr = str(turn.get("stderr") or "").strip()
+        if stderr:
+            summary = f"{summary} stderr: {stderr}"
+        self._session_recorder.finalize_session(
+            str(record["session_id"]),
+            SessionStatus.NEEDS_HUMAN,
+            summary,
+            current_round=1,
+        )
 
     def _mirror_bridge_turn(self, record: dict[str, Any], turn: dict[str, Any]) -> None:
         session_id = str(record["session_id"])
