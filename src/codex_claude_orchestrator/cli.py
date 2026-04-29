@@ -139,6 +139,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("readonly", "shared"),
         default="readonly",
     )
+    claude_bridge_start.add_argument(
+        "--visual",
+        choices=("none", "terminal"),
+        default="none",
+        help="Open a live watcher for bridge output",
+    )
     claude_bridge_start.add_argument("--dry-run", action="store_true")
     claude_bridge_send = claude_bridge_subparsers.add_parser("send", help="Send a follow-up to a Claude bridge")
     claude_bridge_send.add_argument("--repo", required=True)
@@ -265,6 +271,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             repo_root=repo_root,
                             goal=args.goal,
                             workspace_mode=args.workspace_mode,
+                            visual=args.visual,
                             dry_run=args.dry_run,
                         ),
                         ensure_ascii=False,

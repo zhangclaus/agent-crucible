@@ -4,7 +4,7 @@
 
 **Goal:** Add a recoverable Claude Code bridge so Codex can keep sending follow-up instructions into one Claude conversation.
 
-**Architecture:** Add a focused `claude_bridge.py` module for command construction, Claude JSON parsing, bridge records, and turn logs. Wire `claude bridge start/send/tail/list` into the existing argparse CLI while leaving `claude open` and tmux flows unchanged.
+**Architecture:** Add a focused `claude_bridge.py` module for command construction, Claude JSON parsing, bridge records, turn logs, and optional Terminal watcher scripts. Wire `claude bridge start/send/tail/list` into the existing argparse CLI while leaving `claude open` as a compatibility path and making `bridge start --visual terminal` the recommended visible workflow.
 
 **Tech Stack:** Python stdlib, Claude CLI `--print` / `--resume`, JSONL persistence, pytest.
 
@@ -16,6 +16,7 @@
 - [x] Write failing CLI tests for `claude bridge start/send/tail/list`.
 - [x] Implement `ClaudeBridge` storage, parsing, and command execution.
 - [x] Wire bridge commands into `cli.py`.
+- [x] Add `bridge start --visual terminal` watcher window support.
 - [x] Run targeted tests.
 - [x] Run the full pytest suite.
 - [x] Commit docs, implementation, and tests.

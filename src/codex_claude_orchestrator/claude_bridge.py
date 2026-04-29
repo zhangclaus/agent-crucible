@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -20,6 +21,7 @@ class ClaudeBridge:
         state_root: Path,
         *,
         runner: CommandRunner | None = None,
+        visual_runner: CommandRunner | None = None,
         bridge_id_factory: Callable[[], str] | None = None,
         turn_id_factory: Callable[[], str] | None = None,
     ):
@@ -27,6 +29,7 @@ class ClaudeBridge:
         self._bridges_root = state_root / "claude-bridge"
         self._bridges_root.mkdir(parents=True, exist_ok=True)
         self._runner = runner or subprocess.run
+        self._visual_runner = visual_runner or subprocess.run
         self._bridge_id_factory = bridge_id_factory or (lambda: f"bridge-{uuid4().hex}")
         self._turn_id_factory = turn_id_factory or (lambda: f"turn-{uuid4().hex}")
 
@@ -36,6 +39,7 @@ class ClaudeBridge:
         repo_root: Path,
         goal: str,
         workspace_mode: str = "readonly",
+        visual: str = "none",
         dry_run: bool = False,
     ) -> dict[str, Any]:
         repo = self._resolve_repo(repo_root)
@@ -68,7 +72,8 @@ class ClaudeBridge:
         record = self._advance_record(record, turn, dry_run=dry_run)
         self._write_record(bridge_id, record)
         self._write_latest(bridge_id)
-        return {"bridge": record, "latest_turn": turn}
+        visual_result = self._start_visual(bridge_id=bridge_id, mode=visual, dry_run=dry_run)
+        return {"bridge": record, "latest_turn": turn, "visual": visual_result}
 
     def send(
         self,
@@ -263,6 +268,104 @@ class ClaudeBridge:
         updated["turn_count"] = int(updated["turn_count"]) + 1
         updated["updated_at"] = turn["created_at"]
         return updated
+
+    def _start_visual(self, *, bridge_id: str, mode: str, dry_run: bool) -> dict[str, Any]:
+        if mode == "none":
+            return {"mode": "none", "launched": False}
+        if mode != "terminal":
+            raise ValueError(f"unsupported visual mode: {mode}")
+
+        watch_script_path = self._write_watch_script(bridge_id)
+        open_command = self._terminal_open_command(watch_script_path)
+        if not dry_run:
+            result = self._visual_runner(open_command, text=True, capture_output=True, check=False)
+            if result.returncode != 0:
+                return {
+                    "mode": "terminal",
+                    "launched": False,
+                    "watch_script_path": str(watch_script_path),
+                    "open_command": open_command,
+                    "error": result.stderr or result.stdout,
+                }
+        return {
+            "mode": "terminal",
+            "launched": not dry_run,
+            "watch_script_path": str(watch_script_path),
+            "open_command": open_command,
+        }
+
+    def _write_watch_script(self, bridge_id: str) -> Path:
+        bridge_dir = self._bridge_dir(bridge_id)
+        watch_script_path = bridge_dir / "watch.zsh"
+        record_path = bridge_dir / "record.json"
+        turns_path = bridge_dir / "turns.jsonl"
+        script = "\n".join(
+            [
+                "#!/bin/zsh",
+                "set -e",
+                f"BRIDGE_ID={shlex.quote(bridge_id)}",
+                f"RECORD_PATH={shlex.quote(str(record_path))}",
+                f"TURNS_PATH={shlex.quote(str(turns_path))}",
+                "while true; do",
+                "  clear",
+                "  printf '[orchestrator] Claude bridge watcher: %s\\n' \"$BRIDGE_ID\"",
+                "  printf '[orchestrator] Send follow-ups from Codex with: orchestrator claude bridge send --repo <repo> --message ...\\n\\n'",
+                "  /usr/bin/python3 - \"$RECORD_PATH\" \"$TURNS_PATH\" <<'PY'",
+                "import json",
+                "import sys",
+                "from pathlib import Path",
+                "",
+                "record_path = Path(sys.argv[1])",
+                "turns_path = Path(sys.argv[2])",
+                "if record_path.exists():",
+                "    record = json.loads(record_path.read_text(encoding='utf-8'))",
+                "    print(f\"repo: {record.get('repo')}\")",
+                "    print(f\"status: {record.get('status')}  turns: {record.get('turn_count')}  claude_session: {record.get('claude_session_id') or '-'}\")",
+                "    print(f\"goal: {record.get('goal')}\")",
+                "else:",
+                "    print('record: pending')",
+                "print()",
+                "if not turns_path.exists():",
+                "    print('No turns yet.')",
+                "    raise SystemExit",
+                "turns = [json.loads(line) for line in turns_path.read_text(encoding='utf-8').splitlines() if line.strip()]",
+                "for turn in turns[-5:]:",
+                "    print('=' * 72)",
+                "    print(f\"{turn.get('kind')}  {turn.get('created_at')}  rc={turn.get('returncode')}\")",
+                "    message = (turn.get('message') or '').strip()",
+                "    result = (turn.get('result_text') or '').strip()",
+                "    if message:",
+                "        print('\\n[message]')",
+                "        print(message)",
+                "    print('\\n[claude]')",
+                "    print(result or '(no Claude output yet)')",
+                "    if turn.get('parse_error'):",
+                "        print(f\"\\n[parse_error] {turn.get('parse_error')}\")",
+                "    if turn.get('stderr'):",
+                "        print(f\"\\n[stderr]\\n{turn.get('stderr')}\")",
+                "PY",
+                "  sleep 2",
+                "done",
+                "",
+            ]
+        )
+        self._write_text(watch_script_path, script)
+        watch_script_path.chmod(0o700)
+        return watch_script_path
+
+    def _terminal_open_command(self, script_path: Path) -> list[str]:
+        shell_command = shlex.join(["/bin/zsh", str(script_path)])
+        return [
+            "osascript",
+            "-e",
+            'tell application "Terminal"',
+            "-e",
+            "activate",
+            "-e",
+            f"do script {json.dumps(shell_command)}",
+            "-e",
+            "end tell",
+        ]
 
     def _resolve_repo(self, repo_root: Path) -> Path:
         repo = repo_root.resolve()

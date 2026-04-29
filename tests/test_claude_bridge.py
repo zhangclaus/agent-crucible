@@ -46,6 +46,53 @@ def test_bridge_start_runs_claude_and_records_latest_session(tmp_path: Path):
     assert (repo_root / ".orchestrator" / "claude-bridge" / "latest").read_text(encoding="utf-8") == "bridge-fixed"
 
 
+def test_bridge_start_with_terminal_visual_opens_watch_window(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    visual_calls = []
+
+    def fake_runner(command, **kwargs):
+        return CompletedProcess(
+            command,
+            0,
+            stdout='{"type":"result","session_id":"claude-session-1","result":"第一轮完成。"}',
+            stderr="",
+        )
+
+    def fake_visual_runner(command, **kwargs):
+        visual_calls.append(list(command))
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    bridge = ClaudeBridge(
+        state_root=repo_root / ".orchestrator",
+        runner=fake_runner,
+        visual_runner=fake_visual_runner,
+        bridge_id_factory=lambda: "bridge-visible",
+        turn_id_factory=lambda: "turn-start",
+    )
+
+    result = bridge.start(
+        repo_root=repo_root,
+        goal="检查项目结构",
+        workspace_mode="readonly",
+        visual="terminal",
+    )
+
+    visual = result["visual"]
+    watch_script = Path(visual["watch_script_path"])
+
+    assert visual["mode"] == "terminal"
+    assert visual["launched"] is True
+    assert watch_script.is_file()
+    assert visual_calls[0][:2] == ["osascript", "-e"]
+    assert "activate" in visual_calls[0]
+    assert any(part.startswith("do script") for part in visual_calls[0])
+    script = watch_script.read_text(encoding="utf-8")
+    assert "turns.jsonl" in script
+    assert "while true" in script
+    assert "result_text" in script
+
+
 def test_bridge_send_resumes_existing_claude_session(tmp_path: Path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
