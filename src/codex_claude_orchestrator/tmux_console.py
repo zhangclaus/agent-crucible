@@ -194,6 +194,8 @@ class TmuxCommandRunner:
         command_array = ["cmd=("]
         command_array.extend(f"  {shlex.quote(str(arg))}" for arg in args)
         command_array.append(")")
+        stdout_pipe = stdout_path.with_name("stdout.pipe")
+        stderr_pipe = stderr_path.with_name("stderr.pipe")
         return "\n".join(
             [
                 "#!/bin/zsh",
@@ -203,12 +205,19 @@ class TmuxCommandRunner:
                 "printf '\\n[orchestrator] $'",
                 "printf ' %q' \"${cmd[@]}\"",
                 "printf '\\n'",
-                (
-                    f"\"${{cmd[@]}}\" "
-                    f"> >(tee {shlex.quote(str(stdout_path))}) "
-                    f"2> >(tee {shlex.quote(str(stderr_path))} >&2)"
-                ),
+                f"stdout_pipe={shlex.quote(str(stdout_pipe))}",
+                f"stderr_pipe={shlex.quote(str(stderr_pipe))}",
+                'rm -f "$stdout_pipe" "$stderr_pipe"',
+                'mkfifo "$stdout_pipe" "$stderr_pipe"',
+                f"tee {shlex.quote(str(stdout_path))} < \"$stdout_pipe\" &",
+                "stdout_tee_pid=$!",
+                f"tee {shlex.quote(str(stderr_path))} < \"$stderr_pipe\" >&2 &",
+                "stderr_tee_pid=$!",
+                '"${cmd[@]}" > "$stdout_pipe" 2> "$stderr_pipe"',
                 "exit_code=$?",
+                'wait "$stdout_tee_pid"',
+                'wait "$stderr_tee_pid"',
+                'rm -f "$stdout_pipe" "$stderr_pipe"',
                 f"printf '%s' \"$exit_code\" > {shlex.quote(str(exit_path))}",
                 "printf '\\n[orchestrator] exit %s\\n' \"$exit_code\"",
                 "exit \"$exit_code\"",

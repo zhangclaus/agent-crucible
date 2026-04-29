@@ -171,3 +171,30 @@ def test_tmux_command_runner_script_preserves_multiline_arguments(tmp_path: Path
     script = (log_root / "cmd-multiline" / "run.zsh").read_text(encoding="utf-8")
     assert "exit_code=$?" in script
     assert "status=$?" not in script
+
+
+def test_tmux_command_runner_script_writes_exit_code_after_tee_finishes(tmp_path: Path):
+    log_root = tmp_path / "logs"
+
+    def fake_runner(command, **kwargs):
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    runner = TmuxCommandRunner(
+        target_pane="orchestrator-test:claude.0",
+        log_root=log_root,
+        tmux="tmux",
+        runner=fake_runner,
+        command_id_factory=lambda: "cmd-pipe-order",
+        poll_interval_seconds=0,
+        timeout_seconds=1,
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner(["/bin/zsh", "-c", "printf done"], cwd=tmp_path, text=True, capture_output=True, check=False)
+
+    script = (log_root / "cmd-pipe-order" / "run.zsh").read_text(encoding="utf-8")
+    assert "mkfifo" in script
+    assert "stdout_tee_pid=$!" in script
+    assert "stderr_tee_pid=$!" in script
+    assert script.index('wait "$stdout_tee_pid"') < script.index("printf '%s' \"$exit_code\"")
+    assert script.index('wait "$stderr_tee_pid"') < script.index("printf '%s' \"$exit_code\"")
