@@ -17,9 +17,28 @@ from codex_claude_orchestrator.session_engine import SessionEngine
 from codex_claude_orchestrator.session_recorder import SessionRecorder
 from codex_claude_orchestrator.skill_evolution import SkillEvolution
 from codex_claude_orchestrator.supervisor import Supervisor
+from codex_claude_orchestrator.tmux_console import TmuxCommandRunner, TmuxConsole, build_default_term_name
 from codex_claude_orchestrator.ui_server import run_ui_server
 from codex_claude_orchestrator.verification_runner import VerificationRunner
 from codex_claude_orchestrator.workspace_manager import WorkspaceManager
+
+
+def add_session_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--goal", required=True)
+    parser.add_argument("--repo", required=True)
+    parser.add_argument(
+        "--workspace-mode",
+        choices=("isolated", "shared", "readonly"),
+        default="isolated",
+    )
+    parser.add_argument("--assigned-agent", default="claude")
+    parser.add_argument("--max-rounds", type=int, default=1)
+    parser.add_argument("--verification-command", action="append", default=[])
+    parser.add_argument(
+        "--allow-shared-write",
+        action="store_true",
+        help="Allow a worker to write directly in shared workspace mode",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,21 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     session = subparsers.add_parser("session", help="Run adversarial V2 sessions")
     session_subparsers = session.add_subparsers(dest="session_command", required=True)
     session_start = session_subparsers.add_parser("start", help="Start an adversarial session")
-    session_start.add_argument("--goal", required=True)
-    session_start.add_argument("--repo", required=True)
-    session_start.add_argument(
-        "--workspace-mode",
-        choices=("isolated", "shared", "readonly"),
-        default="isolated",
-    )
-    session_start.add_argument("--assigned-agent", default="claude")
-    session_start.add_argument("--max-rounds", type=int, default=1)
-    session_start.add_argument("--verification-command", action="append", default=[])
-    session_start.add_argument(
-        "--allow-shared-write",
-        action="store_true",
-        help="Allow a worker to write directly in shared workspace mode",
-    )
+    add_session_arguments(session_start)
 
     sessions = subparsers.add_parser("sessions", help="Inspect adversarial V2 sessions")
     sessions_subparsers = sessions.add_subparsers(dest="sessions_command", required=True)
@@ -106,35 +111,56 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8765)
 
+    term = subparsers.add_parser("term", help="Manage tmux terminal consoles")
+    term_subparsers = term.add_subparsers(dest="term_command", required=True)
+    term_session = term_subparsers.add_parser("session", help="Run sessions in a tmux console")
+    term_session_subparsers = term_session.add_subparsers(dest="term_session_command", required=True)
+    term_session_start = term_session_subparsers.add_parser("start", help="Start a tmux-backed session")
+    term_session_start.add_argument("--name", required=False)
+    add_session_arguments(term_session_start)
+
+    term_attach = term_subparsers.add_parser("attach", help="Attach to a tmux console")
+    term_attach.add_argument("--name", required=True)
+    term_subparsers.add_parser("list", help="List tmux consoles")
+
+    term_run_session = term_subparsers.add_parser("run-session", help=argparse.SUPPRESS)
+    term_run_session.add_argument("--tmux-name", required=True)
+    add_session_arguments(term_run_session)
+
     subparsers.add_parser("doctor", help="Check local orchestrator prerequisites")
     return parser
 
 
-def build_supervisor(state_root: Path) -> Supervisor:
+def build_supervisor(state_root: Path, worker_runner=None) -> Supervisor:
     return Supervisor(
         prompt_compiler=PromptCompiler(),
         workspace_manager=WorkspaceManager(state_root),
-        adapter=ClaudeCliAdapter(),
+        adapter=ClaudeCliAdapter(runner=worker_runner),
         policy_gate=PolicyGate(),
         run_recorder=RunRecorder(state_root),
         result_evaluator=ResultEvaluator(),
     )
 
 
-def build_session_engine(repo_root: Path) -> SessionEngine:
+def build_session_engine(repo_root: Path, worker_runner=None, verification_command_runner=None) -> SessionEngine:
     state_root = repo_root / ".orchestrator"
     session_recorder = SessionRecorder(state_root)
     return SessionEngine(
-        supervisor=build_supervisor(state_root),
+        supervisor=build_supervisor(state_root, worker_runner=worker_runner),
         run_recorder=RunRecorder(state_root),
         session_recorder=session_recorder,
         verification_runner=VerificationRunner(
             repo_root=repo_root,
             session_recorder=session_recorder,
             policy_gate=PolicyGate(),
+            runner=verification_command_runner,
         ),
         skill_evolution=SkillEvolution(state_root),
     )
+
+
+def build_tmux_console() -> TmuxConsole:
+    return TmuxConsole()
 
 
 def run_doctor(registry: AgentRegistry) -> dict[str, object]:
@@ -168,6 +194,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "doctor":
         print(json.dumps(run_doctor(registry), ensure_ascii=False))
         return 0
+
+    if args.command == "term":
+        return handle_term_command(args, registry)
 
     if args.command == "runs":
         recorder = RunRecorder(Path(args.repo).resolve() / ".orchestrator")
@@ -273,3 +302,86 @@ def main(argv: Sequence[str] | None = None) -> int:
     outcome = supervisor.dispatch(task, repo_root)
     print(json.dumps(outcome.to_dict(), ensure_ascii=False))
     return 0
+
+
+def handle_term_command(args, registry: AgentRegistry) -> int:
+    console = build_tmux_console()
+    if args.term_command == "list":
+        print(json.dumps({"sessions": console.list_sessions()}, ensure_ascii=False))
+        return 0
+    if args.term_command == "attach":
+        result = console.attach(args.name)
+        print(json.dumps({"attached": args.name, "returncode": result.returncode}, ensure_ascii=False))
+        return result.returncode
+    if args.term_command == "session":
+        if args.term_session_command != "start":
+            raise ValueError(f"Unsupported term session command: {args.term_session_command}")
+        repo_root = Path(args.repo).resolve()
+        name = args.name or build_default_term_name(repo_root)
+        payload = console.launch_session_start(
+            name=name,
+            repo_root=repo_root,
+            orchestrator_executable=str(Path(sys.argv[0]).resolve()),
+            session_args=build_session_cli_args(args, repo_root),
+        )
+        print(json.dumps(payload, ensure_ascii=False))
+        return 0
+    if args.term_command == "run-session":
+        session = run_tmux_backed_session(args, registry)
+        print(json.dumps(session.to_dict(), ensure_ascii=False))
+        return 0
+    raise ValueError(f"Unsupported term command: {args.term_command}")
+
+
+def build_session_cli_args(args, repo_root: Path) -> list[str]:
+    command = [
+        "--goal",
+        args.goal,
+        "--repo",
+        str(repo_root),
+        "--workspace-mode",
+        args.workspace_mode,
+        "--assigned-agent",
+        args.assigned_agent,
+        "--max-rounds",
+        str(args.max_rounds),
+    ]
+    for verification_command in args.verification_command:
+        command.extend(["--verification-command", verification_command])
+    if args.allow_shared_write:
+        command.append("--allow-shared-write")
+    return command
+
+
+def run_tmux_backed_session(args, registry: AgentRegistry):
+    repo_root = Path(args.repo).resolve()
+    state_root = repo_root / ".orchestrator"
+    worker_runner = TmuxCommandRunner(
+        target_pane=f"{args.tmux_name}:claude.0",
+        log_root=state_root / "term" / args.tmux_name / "claude",
+    )
+    verification_command_runner = TmuxCommandRunner(
+        target_pane=f"{args.tmux_name}:verify.0",
+        log_root=state_root / "term" / args.tmux_name / "verify",
+    )
+    engine = build_session_engine(
+        repo_root,
+        worker_runner=worker_runner,
+        verification_command_runner=verification_command_runner,
+    )
+    workspace_mode = WorkspaceMode(args.workspace_mode)
+    profile = registry.get(args.assigned_agent)
+    return engine.start(
+        repo_root=repo_root,
+        goal=args.goal,
+        assigned_agent=profile.name,
+        workspace_mode=workspace_mode,
+        allowed_tools=registry.allowed_tools(
+            profile.name,
+            workspace_mode,
+            shared_write_allowed=args.allow_shared_write,
+        ),
+        max_rounds=args.max_rounds,
+        verification_commands=args.verification_command,
+        shared_write_allowed=args.allow_shared_write,
+    )

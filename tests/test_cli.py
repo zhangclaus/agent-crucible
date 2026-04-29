@@ -2,6 +2,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
+from subprocess import CompletedProcess
 
 from codex_claude_orchestrator.cli import main
 from codex_claude_orchestrator.models import (
@@ -37,6 +38,7 @@ def test_build_parser_exposes_v2_session_and_skill_commands():
     assert "sessions" in subparsers_action.choices
     assert "skills" in subparsers_action.choices
     assert "ui" in subparsers_action.choices
+    assert "term" in subparsers_action.choices
 
 
 class FakeSupervisor:
@@ -362,6 +364,152 @@ def test_ui_command_starts_visual_console(tmp_path: Path, monkeypatch):
     assert calls[0]["repo_root"] == repo_root.resolve()
     assert calls[0]["host"] == "127.0.0.1"
     assert calls[0]["port"] == 9999
+
+
+def test_term_session_start_launches_tmux_console(tmp_path: Path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    fake_console = FakeTmuxConsole()
+
+    monkeypatch.setattr("codex_claude_orchestrator.cli.build_tmux_console", lambda: fake_console)
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        exit_code = main(
+            [
+                "term",
+                "session",
+                "start",
+                "--name",
+                "orchestrator-test",
+                "--goal",
+                "Inspect repo",
+                "--repo",
+                str(repo_root),
+                "--workspace-mode",
+                "readonly",
+                "--verification-command",
+                "pytest -q",
+            ]
+        )
+
+    payload = json.loads(stdout.getvalue())
+    assert exit_code == 0
+    assert payload["tmux_session"] == "orchestrator-test"
+    assert payload["attach_command"] == "tmux attach -t orchestrator-test"
+    assert fake_console.launch_calls[0]["name"] == "orchestrator-test"
+    assert fake_console.launch_calls[0]["repo_root"] == repo_root.resolve()
+    assert fake_console.launch_calls[0]["session_args"] == [
+        "--goal",
+        "Inspect repo",
+        "--repo",
+        str(repo_root.resolve()),
+        "--workspace-mode",
+        "readonly",
+        "--assigned-agent",
+        "claude",
+        "--max-rounds",
+        "1",
+        "--verification-command",
+        "pytest -q",
+    ]
+
+
+def test_term_list_and_attach_use_tmux_console(monkeypatch):
+    fake_console = FakeTmuxConsole()
+
+    monkeypatch.setattr("codex_claude_orchestrator.cli.build_tmux_console", lambda: fake_console)
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        list_exit = main(["term", "list"])
+    list_payload = json.loads(stdout.getvalue())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        attach_exit = main(["term", "attach", "--name", "orchestrator-test"])
+    attach_payload = json.loads(stdout.getvalue())
+
+    assert list_exit == 0
+    assert list_payload == {"sessions": ["orchestrator-test"]}
+    assert attach_exit == 0
+    assert attach_payload == {"attached": "orchestrator-test", "returncode": 0}
+    assert fake_console.attach_calls == ["orchestrator-test"]
+
+
+def test_term_run_session_uses_tmux_runners(tmp_path: Path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    fake_engine = FakeSessionEngine()
+    build_calls = []
+    runner_targets = []
+
+    class FakeTmuxCommandRunner:
+        def __init__(self, **kwargs):
+            runner_targets.append(kwargs["target_pane"])
+
+        def __call__(self, *args, **kwargs):
+            return CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    def fake_build_session_engine(repo_root, worker_runner=None, verification_command_runner=None):
+        build_calls.append(
+            {
+                "repo_root": repo_root,
+                "worker_runner": worker_runner,
+                "verification_command_runner": verification_command_runner,
+            }
+        )
+        return fake_engine
+
+    monkeypatch.setattr("codex_claude_orchestrator.cli.TmuxCommandRunner", FakeTmuxCommandRunner)
+    monkeypatch.setattr("codex_claude_orchestrator.cli.build_session_engine", fake_build_session_engine)
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        exit_code = main(
+            [
+                "term",
+                "run-session",
+                "--tmux-name",
+                "orchestrator-test",
+                "--goal",
+                "Implement via tmux",
+                "--repo",
+                str(repo_root),
+                "--workspace-mode",
+                "readonly",
+                "--max-rounds",
+                "2",
+            ]
+        )
+
+    payload = json.loads(stdout.getvalue())
+    assert exit_code == 0
+    assert payload["session_id"] == "session-cli"
+    assert runner_targets == ["orchestrator-test:claude.0", "orchestrator-test:verify.0"]
+    assert build_calls[0]["repo_root"] == repo_root.resolve()
+    assert fake_engine.calls[0]["goal"] == "Implement via tmux"
+    assert fake_engine.calls[0]["max_rounds"] == 2
+
+
+class FakeTmuxConsole:
+    def __init__(self):
+        self.launch_calls = []
+        self.attach_calls = []
+
+    def launch_session_start(self, **kwargs):
+        self.launch_calls.append(kwargs)
+        return {
+            "tmux_session": kwargs["name"],
+            "attach_command": f"tmux attach -t {kwargs['name']}",
+        }
+
+    def list_sessions(self):
+        return ["orchestrator-test"]
+
+    def attach(self, name):
+        self.attach_calls.append(name)
+        return CompletedProcess(["tmux", "attach", "-t", name], 0)
 
 
 class FakeWorkerResult:
