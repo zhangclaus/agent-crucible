@@ -459,7 +459,83 @@ def test_bridge_verify_records_verification_for_latest_turn(tmp_path: Path):
     assert result["bridge"]["latest_verification_status"] == "failed"
     assert verification_runner.commands == ["pytest -q"]
 
+    snapshot = bridge.status(repo_root=repo_root, bridge_id=None)
+    assert snapshot["latest_verification"]["passed"] is False
+    assert snapshot["suggested_next"]["verification_failed"] is True
+
+    log_text = (repo_root / ".orchestrator" / "claude-bridge" / "bridge-verify" / "bridge.log").read_text(
+        encoding="utf-8"
+    )
+    assert "[VERIFY] FAIL" in log_text
+    assert "pytest -q" in log_text
+
     details = recorder.read_session("session-verify")
     assert details["verifications"][0]["command"] == "pytest -q"
     assert details["turns"][-1]["phase"] == "final_verify"
     assert details["turns"][-1]["round_index"] == 1
+
+
+def test_bridge_verify_rejects_unknown_explicit_turn_id(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    recorder = SessionRecorder(repo_root / ".orchestrator")
+    verification_runner = FakeBridgeVerificationRunner(recorder, [True])
+
+    bridge = ClaudeBridge(
+        state_root=repo_root / ".orchestrator",
+        runner=lambda command, **kwargs: CompletedProcess(
+            command,
+            0,
+            stdout='{"type":"result","session_id":"claude-session-1","result":"完成。"}',
+            stderr="",
+        ),
+        session_recorder=recorder,
+        verification_runner=verification_runner,
+        bridge_id_factory=lambda: "bridge-missing-turn",
+        turn_id_factory=lambda: "turn-start",
+        session_id_factory=lambda: "session-missing-turn",
+        task_id_factory=lambda: "task-missing-turn",
+        trace_id_factory=lambda: "trace-missing-turn",
+    )
+
+    bridge.start(repo_root=repo_root, goal="验证未知 turn", workspace_mode="readonly", supervised=True)
+
+    try:
+        bridge.verify(repo_root=repo_root, bridge_id=None, turn_id="missing-turn", command="pytest -q")
+    except ValueError as exc:
+        assert "unknown bridge turn" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+    assert verification_runner.commands == []
+    assert recorder.read_session("session-missing-turn")["verifications"] == []
+
+
+def test_bridge_verify_records_passing_status(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    recorder = SessionRecorder(repo_root / ".orchestrator")
+    verification_runner = FakeBridgeVerificationRunner(recorder, [True])
+
+    bridge = ClaudeBridge(
+        state_root=repo_root / ".orchestrator",
+        runner=lambda command, **kwargs: CompletedProcess(
+            command,
+            0,
+            stdout='{"type":"result","session_id":"claude-session-1","result":"完成。"}',
+            stderr="",
+        ),
+        session_recorder=recorder,
+        verification_runner=verification_runner,
+        bridge_id_factory=lambda: "bridge-pass",
+        turn_id_factory=lambda: "turn-start",
+        session_id_factory=lambda: "session-pass",
+        task_id_factory=lambda: "task-pass",
+        trace_id_factory=lambda: "trace-pass",
+    )
+
+    bridge.start(repo_root=repo_root, goal="运行通过验证", workspace_mode="readonly", supervised=True)
+    result = bridge.verify(repo_root=repo_root, bridge_id=None, command="pytest -q")
+
+    assert result["verification"]["passed"] is True
+    assert result["bridge"]["latest_verification_status"] == "passed"

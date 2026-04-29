@@ -205,6 +205,7 @@ class ClaudeBridge:
         resolved_turn_id = turn_id or str(record.get("latest_turn_id") or "")
         if not resolved_turn_id:
             raise ValueError(f"bridge {resolved_bridge_id} has no turn to verify")
+        self._require_bridge_turn(resolved_bridge_id, resolved_turn_id)
 
         verification = self._verification_runner.run(str(record["session_id"]), resolved_turn_id, command)
         self._append_verification_turn(record, verification)
@@ -478,6 +479,10 @@ class ClaudeBridge:
     def _require_supervised(self, record: dict[str, Any]) -> None:
         if not record.get("supervised") or not record.get("session_id"):
             raise ValueError(f"bridge {record['bridge_id']} is not supervised")
+
+    def _require_bridge_turn(self, bridge_id: str, turn_id: str) -> None:
+        if not any(turn.get("turn_id") == turn_id for turn in self._read_turns(bridge_id)):
+            raise ValueError(f"bridge {bridge_id} has unknown bridge turn: {turn_id}")
 
     def _append_verification_turn(self, record: dict[str, Any], verification: VerificationRecord) -> None:
         turn = TurnRecord(
