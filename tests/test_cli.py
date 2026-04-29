@@ -403,6 +403,88 @@ def test_claude_open_launches_direct_window(tmp_path: Path, monkeypatch):
     }
 
 
+def test_claude_bridge_commands_route_to_bridge(tmp_path: Path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    fake_bridge = FakeClaudeBridge()
+
+    monkeypatch.setattr("codex_claude_orchestrator.cli.build_claude_bridge", lambda repo_root: fake_bridge)
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        start_exit = main(
+            [
+                "claude",
+                "bridge",
+                "start",
+                "--repo",
+                str(repo_root),
+                "--goal",
+                "Inspect repo",
+                "--workspace-mode",
+                "readonly",
+            ]
+        )
+    start_payload = json.loads(stdout.getvalue())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        send_exit = main(
+            [
+                "claude",
+                "bridge",
+                "send",
+                "--repo",
+                str(repo_root),
+                "--message",
+                "继续",
+            ]
+        )
+    send_payload = json.loads(stdout.getvalue())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        tail_exit = main(["claude", "bridge", "tail", "--repo", str(repo_root), "--limit", "1"])
+    tail_payload = json.loads(stdout.getvalue())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        list_exit = main(["claude", "bridge", "list", "--repo", str(repo_root)])
+    list_payload = json.loads(stdout.getvalue())
+
+    assert start_exit == 0
+    assert send_exit == 0
+    assert tail_exit == 0
+    assert list_exit == 0
+    assert start_payload["bridge"]["bridge_id"] == "bridge-cli"
+    assert send_payload["latest_turn"]["message"] == "继续"
+    assert tail_payload["turns"][0]["turn_id"] == "turn-cli"
+    assert list_payload["bridges"][0]["bridge_id"] == "bridge-cli"
+    assert fake_bridge.calls == [
+        {
+            "method": "start",
+            "repo_root": repo_root.resolve(),
+            "goal": "Inspect repo",
+            "workspace_mode": "readonly",
+            "dry_run": False,
+        },
+        {
+            "method": "send",
+            "repo_root": repo_root.resolve(),
+            "bridge_id": None,
+            "message": "继续",
+            "dry_run": False,
+        },
+        {
+            "method": "tail",
+            "repo_root": repo_root.resolve(),
+            "bridge_id": None,
+            "limit": 1,
+        },
+        {"method": "list", "repo_root": repo_root.resolve()},
+    ]
+
+
 def test_term_session_start_launches_tmux_console(tmp_path: Path, monkeypatch):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -570,6 +652,30 @@ class FakeClaudeWindowLaunch:
             "launched": False,
             "open_command": ["osascript", "-e", "..."],
         }
+
+
+class FakeClaudeBridge:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, **kwargs):
+        self.calls.append({"method": "start", **kwargs})
+        return {"bridge": {"bridge_id": "bridge-cli"}, "latest_turn": {"turn_id": "turn-cli"}}
+
+    def send(self, **kwargs):
+        self.calls.append({"method": "send", **kwargs})
+        return {
+            "bridge": {"bridge_id": "bridge-cli"},
+            "latest_turn": {"turn_id": "turn-cli", "message": kwargs["message"]},
+        }
+
+    def tail(self, **kwargs):
+        self.calls.append({"method": "tail", **kwargs})
+        return {"bridge": {"bridge_id": "bridge-cli"}, "turns": [{"turn_id": "turn-cli"}]}
+
+    def list(self, **kwargs):
+        self.calls.append({"method": "list", **kwargs})
+        return [{"bridge_id": "bridge-cli"}]
 
 
 class FakeWorkerResult:

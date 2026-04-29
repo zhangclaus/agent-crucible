@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from codex_claude_orchestrator.adapters.claude_cli import ClaudeCliAdapter
 from codex_claude_orchestrator.agent_registry import AgentRegistry
+from codex_claude_orchestrator.claude_bridge import ClaudeBridge
 from codex_claude_orchestrator.claude_window import ClaudeWindowLauncher
 from codex_claude_orchestrator.models import TaskRecord, WorkspaceMode
 from codex_claude_orchestrator.policy_gate import PolicyGate
@@ -128,6 +129,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Create prompt artifacts without opening Terminal",
     )
+    claude_bridge = claude_subparsers.add_parser("bridge", help="Keep a resumable Claude CLI conversation")
+    claude_bridge_subparsers = claude_bridge.add_subparsers(dest="claude_bridge_command", required=True)
+    claude_bridge_start = claude_bridge_subparsers.add_parser("start", help="Start a resumable Claude bridge")
+    claude_bridge_start.add_argument("--repo", required=True)
+    claude_bridge_start.add_argument("--goal", required=True)
+    claude_bridge_start.add_argument(
+        "--workspace-mode",
+        choices=("readonly", "shared"),
+        default="readonly",
+    )
+    claude_bridge_start.add_argument("--dry-run", action="store_true")
+    claude_bridge_send = claude_bridge_subparsers.add_parser("send", help="Send a follow-up to a Claude bridge")
+    claude_bridge_send.add_argument("--repo", required=True)
+    claude_bridge_send.add_argument("--bridge-id", required=False)
+    claude_bridge_send.add_argument("--message", required=True)
+    claude_bridge_send.add_argument("--dry-run", action="store_true")
+    claude_bridge_tail = claude_bridge_subparsers.add_parser("tail", help="Show recent bridge turns")
+    claude_bridge_tail.add_argument("--repo", required=True)
+    claude_bridge_tail.add_argument("--bridge-id", required=False)
+    claude_bridge_tail.add_argument("--limit", type=int, default=5)
+    claude_bridge_list = claude_bridge_subparsers.add_parser("list", help="List Claude bridges")
+    claude_bridge_list.add_argument("--repo", required=True)
 
     term = subparsers.add_parser("term", help="Manage tmux terminal consoles")
     term_subparsers = term.add_subparsers(dest="term_command", required=True)
@@ -185,6 +208,10 @@ def build_claude_window_launcher() -> ClaudeWindowLauncher:
     return ClaudeWindowLauncher()
 
 
+def build_claude_bridge(repo_root: Path) -> ClaudeBridge:
+    return ClaudeBridge(repo_root / ".orchestrator")
+
+
 def run_doctor(registry: AgentRegistry) -> dict[str, object]:
     python_ok = sys.version_info >= (3, 11)
     claude_path = shutil.which("claude")
@@ -228,6 +255,51 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(json.dumps(launch.to_dict(), ensure_ascii=False))
             return 0
+        if args.claude_command == "bridge":
+            repo_root = Path(args.repo).resolve()
+            bridge = build_claude_bridge(repo_root)
+            if args.claude_bridge_command == "start":
+                print(
+                    json.dumps(
+                        bridge.start(
+                            repo_root=repo_root,
+                            goal=args.goal,
+                            workspace_mode=args.workspace_mode,
+                            dry_run=args.dry_run,
+                        ),
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.claude_bridge_command == "send":
+                print(
+                    json.dumps(
+                        bridge.send(
+                            repo_root=repo_root,
+                            bridge_id=args.bridge_id,
+                            message=args.message,
+                            dry_run=args.dry_run,
+                        ),
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.claude_bridge_command == "tail":
+                print(
+                    json.dumps(
+                        bridge.tail(
+                            repo_root=repo_root,
+                            bridge_id=args.bridge_id,
+                            limit=args.limit,
+                        ),
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.claude_bridge_command == "list":
+                print(json.dumps({"bridges": bridge.list(repo_root=repo_root)}, ensure_ascii=False))
+                return 0
+            raise ValueError(f"Unsupported claude bridge command: {args.claude_bridge_command}")
         raise ValueError(f"Unsupported claude command: {args.claude_command}")
 
     if args.command == "term":
