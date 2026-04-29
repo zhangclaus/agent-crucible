@@ -34,6 +34,8 @@ class TmuxConsole:
         session_args: list[str],
     ) -> dict[str, str]:
         repo_root = repo_root.resolve()
+        if self._session_exists(name):
+            raise FileExistsError(f"tmux session already exists: {name}")
         self._tmux_run(["new-session", "-d", "-s", name, "-c", str(repo_root), "-n", "control"])
         for window in ("claude", "verify", "records", "skills"):
             self._tmux_run(["new-window", "-t", name, "-n", window, "-c", str(repo_root)])
@@ -54,8 +56,14 @@ class TmuxConsole:
         return self._tmux_run(["attach", "-t", name], capture_output=False)
 
     def list_sessions(self) -> list[str]:
-        result = self._tmux_run(["list-sessions", "-F", "#{session_name}"])
+        result = self._tmux_run(["list-sessions", "-F", "#{session_name}"], check=False)
+        if result.returncode != 0:
+            return []
         return [line for line in result.stdout.splitlines() if line.strip()]
+
+    def _session_exists(self, name: str) -> bool:
+        result = self._tmux_run(["has-session", "-t", name], check=False)
+        return result.returncode == 0
 
     def _run_session_command(self, executable: str, name: str, session_args: list[str]) -> str:
         command = [executable, "term", "run-session", "--tmux-name", name, *session_args]
@@ -81,13 +89,22 @@ class TmuxConsole:
     def _send_keys(self, target: str, command: str) -> CompletedProcess[str]:
         return self._tmux_run(["send-keys", "-t", target, command, "C-m"])
 
-    def _tmux_run(self, args: list[str], *, capture_output: bool = True) -> CompletedProcess[str]:
-        return self._runner(
+    def _tmux_run(
+        self,
+        args: list[str],
+        *,
+        capture_output: bool = True,
+        check: bool = True,
+    ) -> CompletedProcess[str]:
+        result = self._runner(
             [self._tmux, *args],
             text=True,
             capture_output=capture_output,
             check=False,
         )
+        if check and result.returncode != 0:
+            raise CalledProcessError(result.returncode, result.args, output=result.stdout, stderr=result.stderr)
+        return result
 
 
 class TmuxCommandRunner:
@@ -143,12 +160,19 @@ class TmuxCommandRunner:
         )
         script_path.chmod(0o700)
 
-        self._runner(
+        send_result = self._runner(
             [self._tmux, "send-keys", "-t", self._target_pane, shlex.join(["/bin/zsh", str(script_path)]), "C-m"],
             text=True,
             capture_output=True,
             check=False,
         )
+        if send_result.returncode != 0:
+            raise CalledProcessError(
+                send_result.returncode,
+                send_result.args,
+                output=send_result.stdout,
+                stderr=send_result.stderr,
+            )
         return self._wait_for_completion(
             args=args,
             stdout_path=stdout_path,
@@ -167,21 +191,27 @@ class TmuxCommandRunner:
         stderr_path: Path,
         exit_path: Path,
     ) -> str:
+        command_array = ["cmd=("]
+        command_array.extend(f"  {shlex.quote(str(arg))}" for arg in args)
+        command_array.append(")")
         return "\n".join(
             [
                 "#!/bin/zsh",
                 "set +e",
                 f"cd {shlex.quote(str(cwd))}",
-                f"printf '\\n[orchestrator] $ {shlex.join(args)}\\n'",
+                *command_array,
+                "printf '\\n[orchestrator] $'",
+                "printf ' %q' \"${cmd[@]}\"",
+                "printf '\\n'",
                 (
-                    f"{shlex.join(args)} "
+                    f"\"${{cmd[@]}}\" "
                     f"> >(tee {shlex.quote(str(stdout_path))}) "
                     f"2> >(tee {shlex.quote(str(stderr_path))} >&2)"
                 ),
-                "status=$?",
-                f"printf '%s' \"$status\" > {shlex.quote(str(exit_path))}",
-                "printf '\\n[orchestrator] exit %s\\n' \"$status\"",
-                "exit \"$status\"",
+                "exit_code=$?",
+                f"printf '%s' \"$exit_code\" > {shlex.quote(str(exit_path))}",
+                "printf '\\n[orchestrator] exit %s\\n' \"$exit_code\"",
+                "exit \"$exit_code\"",
                 "",
             ]
         )
