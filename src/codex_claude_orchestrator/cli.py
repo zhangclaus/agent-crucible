@@ -123,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     term_attach.add_argument("--name", required=True)
     term_subparsers.add_parser("list", help="List tmux consoles")
 
-    term_run_session = term_subparsers.add_parser("run-session", help=argparse.SUPPRESS)
+    term_run_session = term_subparsers.add_parser("run-session", help="Internal runner used by tmux control windows")
     term_run_session.add_argument("--tmux-name", required=True)
     add_session_arguments(term_run_session)
 
