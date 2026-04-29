@@ -32,6 +32,27 @@ class FakeBridgeVerificationRunner:
         return record
 
 
+class FakeBlockedBridgeVerificationRunner:
+    def __init__(self, recorder: SessionRecorder):
+        self._recorder = recorder
+        self.commands: list[str] = []
+
+    def run(self, session_id: str, turn_id: str, command: str) -> VerificationRecord:
+        self.commands.append(command)
+        record = VerificationRecord(
+            verification_id=f"verification-{len(self.commands)}",
+            session_id=session_id,
+            turn_id=turn_id,
+            kind=VerificationKind.COMMAND,
+            passed=False,
+            command=command,
+            exit_code=None,
+            summary="command blocked: blocked command wrapper: bash -lc",
+        )
+        self._recorder.append_verification(session_id, record)
+        return record
+
+
 def test_bridge_start_runs_claude_and_records_latest_session(tmp_path: Path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -1140,3 +1161,39 @@ def test_bridge_verify_records_passing_status(tmp_path: Path):
 
     assert result["verification"]["passed"] is True
     assert result["bridge"]["latest_verification_status"] == "passed"
+
+
+def test_bridge_verify_records_blocked_status_for_policy_block(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    recorder = SessionRecorder(repo_root / ".orchestrator")
+    verification_runner = FakeBlockedBridgeVerificationRunner(recorder)
+
+    bridge = ClaudeBridge(
+        state_root=repo_root / ".orchestrator",
+        runner=lambda command, **kwargs: CompletedProcess(
+            command,
+            0,
+            stdout='{"type":"result","session_id":"claude-session-1","result":"完成。"}',
+            stderr="",
+        ),
+        session_recorder=recorder,
+        verification_runner=verification_runner,
+        bridge_id_factory=lambda: "bridge-blocked",
+        turn_id_factory=lambda: "turn-start",
+        session_id_factory=lambda: "session-blocked",
+        task_id_factory=lambda: "task-blocked",
+        trace_id_factory=lambda: "trace-blocked",
+    )
+
+    bridge.start(repo_root=repo_root, goal="运行被阻止的验证", workspace_mode="readonly", supervised=True)
+    result = bridge.verify(repo_root=repo_root, bridge_id=None, command="bash -lc 'git reset --hard'")
+
+    assert result["verification"]["passed"] is False
+    assert result["verification"]["exit_code"] is None
+    assert result["verification"]["summary"].startswith("command blocked: ")
+    assert result["bridge"]["latest_verification_status"] == "blocked"
+
+    snapshot = bridge.status(repo_root=repo_root, bridge_id=None)
+    assert snapshot["bridge"]["latest_verification_status"] == "blocked"
+    assert snapshot["latest_verification"]["exit_code"] is None

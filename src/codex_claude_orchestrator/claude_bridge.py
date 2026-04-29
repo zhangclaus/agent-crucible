@@ -219,7 +219,7 @@ class ClaudeBridge:
         verification = self._verification_runner.run(str(record["session_id"]), resolved_turn_id, command)
         self._append_verification_turn(record, verification)
         updated = dict(record)
-        updated["latest_verification_status"] = "passed" if verification.passed else "failed"
+        updated["latest_verification_status"] = self._verification_status(verification)
         updated["updated_at"] = verification.created_at
         self._write_record(resolved_bridge_id, updated)
         self._append_log_verification(resolved_bridge_id, verification)
@@ -612,6 +612,13 @@ class ClaudeBridge:
             payload={"verification": verification.to_dict()},
         )
         self._session_recorder.append_turn(str(record["session_id"]), turn)
+
+    def _verification_status(self, verification: VerificationRecord) -> str:
+        if verification.passed:
+            return "passed"
+        if verification.exit_code is None:
+            return "blocked"
+        return "failed"
 
     def _append_challenge_turn(self, record: dict[str, Any], challenge: ChallengeRecord) -> None:
         turn = TurnRecord(
