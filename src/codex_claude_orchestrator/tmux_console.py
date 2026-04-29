@@ -118,6 +118,7 @@ class TmuxCommandRunner:
         command_id_factory: Callable[[], str] | None = None,
         poll_interval_seconds: float = 0.1,
         timeout_seconds: float = 600,
+        heartbeat_interval_seconds: float = 10,
     ):
         self._target_pane = target_pane
         self._log_root = log_root
@@ -126,6 +127,7 @@ class TmuxCommandRunner:
         self._command_id_factory = command_id_factory or (lambda: f"cmd-{uuid4().hex}")
         self._poll_interval_seconds = poll_interval_seconds
         self._timeout_seconds = timeout_seconds
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
 
     def __call__(
         self,
@@ -213,8 +215,22 @@ class TmuxCommandRunner:
                 "stdout_tee_pid=$!",
                 f"tee {shlex.quote(str(stderr_path))} < \"$stderr_pipe\" >&2 &",
                 "stderr_tee_pid=$!",
+                "heartbeat_seconds=0",
+                "(",
+                "  while true; do",
+                f"    sleep {self._heartbeat_interval_seconds:g}",
+                f"    heartbeat_seconds=$((heartbeat_seconds + {int(self._heartbeat_interval_seconds)}))",
+                (
+                    "    printf '\\n[orchestrator] still running (%ss): %s\\n' "
+                    '"$heartbeat_seconds" "${cmd[1]:-${cmd[0]}}" > /dev/tty 2>/dev/null || true'
+                ),
+                "  done",
+                ") &",
+                "heartbeat_pid=$!",
                 '"${cmd[@]}" > "$stdout_pipe" 2> "$stderr_pipe"',
                 "exit_code=$?",
+                'kill "$heartbeat_pid" >/dev/null 2>&1 || true',
+                'wait "$heartbeat_pid" >/dev/null 2>&1 || true',
                 'wait "$stdout_tee_pid"',
                 'wait "$stderr_tee_pid"',
                 'rm -f "$stdout_pipe" "$stderr_pipe"',

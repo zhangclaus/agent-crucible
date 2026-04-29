@@ -149,6 +149,7 @@ def test_tmux_command_runner_script_preserves_multiline_arguments(tmp_path: Path
         command_id_factory=lambda: "cmd-multiline",
         poll_interval_seconds=0,
         timeout_seconds=1,
+        heartbeat_interval_seconds=0.01,
     )
 
     completed = runner(
@@ -198,3 +199,38 @@ def test_tmux_command_runner_script_writes_exit_code_after_tee_finishes(tmp_path
     assert "stderr_tee_pid=$!" in script
     assert script.index('wait "$stdout_tee_pid"') < script.index("printf '%s' \"$exit_code\"")
     assert script.index('wait "$stderr_tee_pid"') < script.index("printf '%s' \"$exit_code\"")
+
+
+def test_tmux_command_runner_script_prints_terminal_heartbeat_without_polluting_stdout(tmp_path: Path):
+    log_root = tmp_path / "logs"
+
+    def fake_runner(command, **kwargs):
+        script_command = command[4]
+        script_path = script_command.split(" ", 1)[1]
+        subprocess.run(["/bin/zsh", script_path], text=True, capture_output=True, check=False)
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    runner = TmuxCommandRunner(
+        target_pane="orchestrator-test:claude.0",
+        log_root=log_root,
+        tmux="tmux",
+        runner=fake_runner,
+        command_id_factory=lambda: "cmd-heartbeat",
+        poll_interval_seconds=0,
+        timeout_seconds=1,
+        heartbeat_interval_seconds=0.01,
+    )
+
+    completed = runner(
+        ["/bin/zsh", "-c", "printf payload"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    script = (log_root / "cmd-heartbeat" / "run.zsh").read_text(encoding="utf-8")
+    assert "heartbeat_pid=$!" in script
+    assert "[orchestrator] still running" in script
+    assert 'kill "$heartbeat_pid"' in script
+    assert completed.stdout == "payload"
