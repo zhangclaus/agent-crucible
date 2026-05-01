@@ -536,6 +536,54 @@ def test_supervisor_loop_dynamic_requires_fresh_review_after_prior_block(tmp_pat
     assert len(auditor_observations) == 2
 
 
+def test_supervisor_loop_dynamic_ignores_stale_review_block_before_current_marker(tmp_path: Path):
+    controller = FakeController([{"passed": True, "summary": "command passed: exit code 0"}])
+    controller.status_payload = {"crew": {"crew_id": "crew-1", "root_goal": "Refactor public API"}, "workers": []}
+
+    first_marker = "<<<CODEX_TURN_DONE crew=crew-1 worker=worker-patch-risk-auditor phase=dynamic-review round=1>>>"
+    old_block = "\n".join(
+        [
+            "Auditor done",
+            "<<<CODEX_REVIEW",
+            "verdict: BLOCK",
+            "summary: Regression in public API.",
+            "findings:",
+            "- Public method now returns None.",
+            ">>>",
+        ]
+    )
+    review_snapshots = [
+        old_block,
+        f"{old_block}\n{first_marker}\nAuditor responded without a structured verdict.",
+    ]
+
+    def observe_stale_block_then_unknown(**kwargs):
+        controller.observed.append(kwargs)
+        marker = kwargs.get("turn_marker") or "<<<CODEX_TURN_DONE status=ready_for_codex>>>"
+        if kwargs["worker_id"] == "worker-patch-risk-auditor":
+            return {"snapshot": f"{review_snapshots.pop(0)}\n{marker}", "marker_seen": True}
+        return {"snapshot": f"{kwargs['worker_id']} done\n{marker}", "marker_seen": True}
+
+    controller.observe_worker = observe_stale_block_then_unknown
+    loop = CrewSupervisorLoop(controller=controller, poll_interval_seconds=0, max_observe_attempts=1)
+
+    result = loop.run(
+        repo_root=tmp_path,
+        goal="Refactor public API",
+        verification_commands=["pytest -q"],
+        max_rounds=2,
+        spawn_policy="dynamic",
+    )
+
+    assert result["status"] == "needs_human"
+    assert result["reason"] == "review_verdict_unknown"
+    assert controller.verify_called == []
+    assert [event["status"] for event in result["events"] if event.get("action") == "review_verdict_parsed"] == [
+        "block",
+        "unknown",
+    ]
+
+
 def test_supervisor_loop_dynamic_records_known_pitfall_and_spawns_guardrail_after_three_failures(tmp_path: Path):
     controller = FakeController(
         [

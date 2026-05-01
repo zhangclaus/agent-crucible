@@ -12,6 +12,9 @@ from codex_claude_orchestrator.crew.review_verdict import ReviewVerdict, ReviewV
 from codex_claude_orchestrator.workers.selection import WorkerSelectionPolicy
 
 
+_TURN_DONE_PREFIX = "<<<CODEX_TURN_DONE"
+
+
 class CrewSupervisorLoop:
     def __init__(
         self,
@@ -327,8 +330,12 @@ class CrewSupervisorLoop:
                 if not auditor_observation.get("marker_seen", False):
                     return self._waiting_result(crew_id, auditor["worker_id"], events)
                 raw_artifact = auditor.get("transcript_artifact", "")
-                review_verdict = self._review_parser.parse(
+                current_turn_text = self._current_turn_text(
                     auditor_observation.get("snapshot", ""),
+                    auditor_marker,
+                )
+                review_verdict = self._review_parser.parse(
+                    current_turn_text,
                     evidence_refs=[raw_artifact] if raw_artifact else [],
                     raw_artifact=raw_artifact,
                 )
@@ -678,6 +685,16 @@ class CrewSupervisorLoop:
             (worker for worker in active_review_workers if worker.get("label") == "patch-risk-auditor"),
             active_review_workers[0] if active_review_workers else None,
         )
+
+    def _current_turn_text(self, snapshot: str, expected_marker: str) -> str:
+        before_marker = snapshot.split(expected_marker, 1)[0]
+        prior_marker_start = before_marker.rfind(_TURN_DONE_PREFIX)
+        if prior_marker_start == -1:
+            return before_marker
+        prior_marker_end = before_marker.find(">>>", prior_marker_start)
+        if prior_marker_end == -1:
+            return before_marker[prior_marker_start + len(_TURN_DONE_PREFIX):]
+        return before_marker[prior_marker_end + len(">>>"):]
 
     def _has_worker_capability(self, details: dict[str, Any], capability: str) -> bool:
         return any(
