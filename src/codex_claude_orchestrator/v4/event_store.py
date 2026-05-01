@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import closing, contextmanager
 import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from uuid import uuid4
 
 from codex_claude_orchestrator.v4.events import AgentEvent, normalize
@@ -31,12 +32,12 @@ class SQLiteEventStore:
         artifact_refs: list[str] | None = None,
         created_at: str = "",
     ) -> AgentEvent:
-        if idempotency_key:
-            existing = self.get_by_idempotency_key(idempotency_key)
-            if existing is not None:
-                return existing
+        with self._write_transaction() as conn:
+            if idempotency_key:
+                existing = self._get_by_idempotency_key(conn, idempotency_key)
+                if existing is not None:
+                    return existing
 
-        with self._connect() as conn:
             sequence = self._next_sequence(conn, stream_id)
             event = AgentEvent(
                 event_id=f"evt-{uuid4().hex}",
@@ -51,40 +52,18 @@ class SQLiteEventStore:
                 artifact_refs=artifact_refs or [],
                 created_at=created_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             )
-            conn.execute(
-                """
-                INSERT INTO events (
-                    event_id,
-                    stream_id,
-                    sequence,
-                    type,
-                    crew_id,
-                    worker_id,
-                    turn_id,
-                    idempotency_key,
-                    payload_json,
-                    artifact_refs_json,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.event_id,
-                    event.stream_id,
-                    event.sequence,
-                    event.type,
-                    event.crew_id,
-                    event.worker_id,
-                    event.turn_id,
-                    event.idempotency_key,
-                    json.dumps(normalize(event.payload), sort_keys=True),
-                    json.dumps(normalize(event.artifact_refs), sort_keys=True),
-                    event.created_at,
-                ),
-            )
+            try:
+                self._insert_event(conn, event)
+            except sqlite3.IntegrityError:
+                if idempotency_key:
+                    existing = self._get_by_idempotency_key(conn, idempotency_key)
+                    if existing is not None:
+                        return existing
+                raise
             return event
 
     def list_stream(self, stream_id: str, after_sequence: int = 0) -> list[AgentEvent]:
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM events
@@ -96,12 +75,12 @@ class SQLiteEventStore:
         return [self._row_to_event(row) for row in rows]
 
     def list_by_turn(self, turn_id: str) -> list[AgentEvent]:
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM events
                 WHERE turn_id = ?
-                ORDER BY stream_id ASC, sequence ASC
+                ORDER BY rowid ASC
                 """,
                 (turn_id,),
             ).fetchall()
@@ -111,15 +90,11 @@ class SQLiteEventStore:
         if not idempotency_key:
             return None
 
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM events WHERE idempotency_key = ?",
-                (idempotency_key,),
-            ).fetchone()
-        return self._row_to_event(row) if row is not None else None
+        with self._connection() as conn:
+            return self._get_by_idempotency_key(conn, idempotency_key)
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS events (
@@ -152,10 +127,71 @@ class SQLiteEventStore:
                 """
             )
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        with closing(self._connect()) as conn:
+            with conn:
+                yield conn
+
+    @contextmanager
+    def _write_transaction(self) -> Iterator[sqlite3.Connection]:
+        with closing(self._connect()) as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                yield conn
+            except Exception:
+                conn.rollback()
+                raise
+            else:
+                conn.commit()
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _insert_event(self, conn: sqlite3.Connection, event: AgentEvent) -> None:
+        conn.execute(
+            """
+            INSERT INTO events (
+                event_id,
+                stream_id,
+                sequence,
+                type,
+                crew_id,
+                worker_id,
+                turn_id,
+                idempotency_key,
+                payload_json,
+                artifact_refs_json,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.event_id,
+                event.stream_id,
+                event.sequence,
+                event.type,
+                event.crew_id,
+                event.worker_id,
+                event.turn_id,
+                event.idempotency_key,
+                json.dumps(normalize(event.payload), sort_keys=True),
+                json.dumps(normalize(event.artifact_refs), sort_keys=True),
+                event.created_at,
+            ),
+        )
+
+    def _get_by_idempotency_key(
+        self,
+        conn: sqlite3.Connection,
+        idempotency_key: str,
+    ) -> AgentEvent | None:
+        row = conn.execute(
+            "SELECT * FROM events WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        return self._row_to_event(row) if row is not None else None
 
     def _next_sequence(self, conn: sqlite3.Connection, stream_id: str) -> int:
         row = conn.execute(
