@@ -151,6 +151,7 @@ class CrewSupervisorLoop:
                         source_worker["worker_id"],
                         interval,
                         turn_marker=scout_marker,
+                        contract_marker=f"<<<CODEX_TURN_DONE crew={crew_id} contract=context_scout>>>",
                     )
                     events.append(
                         {
@@ -187,6 +188,7 @@ class CrewSupervisorLoop:
                 source_worker["worker_id"],
                 interval,
                 turn_marker=pending_marker,
+                contract_marker=f"<<<CODEX_TURN_DONE crew={crew_id} contract=source_write>>>",
             )
             events.append(
                 {
@@ -324,6 +326,7 @@ class CrewSupervisorLoop:
                     auditor["worker_id"],
                     interval,
                     turn_marker=auditor_marker,
+                    contract_marker=f"<<<CODEX_TURN_DONE crew={crew_id} contract=patch_auditor>>>",
                 )
                 events.append(
                     {
@@ -438,6 +441,7 @@ class CrewSupervisorLoop:
                         browser_worker["worker_id"],
                         interval,
                         turn_marker=browser_marker,
+                        contract_marker=f"<<<CODEX_TURN_DONE crew={crew_id} contract=browser_flow>>>",
                     )
                     events.append(
                         {
@@ -671,6 +675,7 @@ class CrewSupervisorLoop:
         worker_id: str,
         interval: float,
         turn_marker: str | None = None,
+        contract_marker: str = "",
     ) -> dict[str, Any]:
         last_observation: dict[str, Any] = {"marker_seen": False, "snapshot": ""}
         for attempt in range(self._max_observe_attempts):
@@ -681,12 +686,26 @@ class CrewSupervisorLoop:
                 lines=200,
                 turn_marker=turn_marker,
             )
+            expected_marker = turn_marker or raw_observation.get("marker", "")
+            if not expected_marker:
+                last_observation = {
+                    **raw_observation,
+                    "marker_seen": raw_observation.get("marker_seen", False),
+                    "reason": "marker found by controller"
+                    if raw_observation.get("marker_seen", False)
+                    else "expected marker not found",
+                }
+                if last_observation.get("marker_seen", False):
+                    return last_observation
+                if interval > 0 and attempt + 1 < self._max_observe_attempts:
+                    time.sleep(interval)
+                continue
             policy_observation = self._marker_policy.evaluate(
                 snapshot=raw_observation.get("snapshot", ""),
-                expected_marker=turn_marker or raw_observation.get("marker", ""),
+                expected_marker=expected_marker,
                 transcript_text=raw_observation.get("transcript", ""),
                 transcript_artifact=raw_observation.get("transcript_artifact", ""),
-                contract_marker=f"<<<CODEX_TURN_DONE crew={crew_id} contract=source_write>>>",
+                contract_marker=contract_marker,
             )
             last_observation = {
                 **raw_observation,

@@ -194,6 +194,29 @@ def test_supervisor_loop_requires_verification_commands(tmp_path: Path):
         loop.supervise(repo_root=tmp_path, crew_id="crew-1", verification_commands=[], max_rounds=1)
 
 
+def test_supervisor_loop_static_explorer_without_expected_marker_keeps_waiting(tmp_path: Path):
+    controller = FakeController([{"passed": True, "summary": "command passed: exit code 0"}])
+
+    def observe_without_marker(**kwargs):
+        controller.observed.append(kwargs)
+        return {"snapshot": "still working", "marker_seen": False}
+
+    controller.observe_worker = observe_without_marker
+    loop = CrewSupervisorLoop(controller=controller, poll_interval_seconds=0, max_observe_attempts=1)
+
+    result = loop.supervise(
+        repo_root=tmp_path,
+        crew_id="crew-1",
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+    )
+
+    assert result["status"] == "waiting_for_worker"
+    assert result["worker_id"] == "worker-explorer"
+    assert result["reason"] == "expected marker not found"
+    assert controller.sent == []
+
+
 def test_supervisor_loop_dynamic_run_spawns_source_contract_without_static_roster(tmp_path: Path):
     controller = FakeController([{"passed": True, "summary": "command passed: exit code 0"}])
     controller.status_payload = {"crew": {"crew_id": "crew-1", "root_goal": "Fix tests"}, "workers": []}
@@ -241,6 +264,37 @@ def test_supervisor_loop_waiting_result_includes_marker_mismatch_reason(tmp_path
     )
 
     assert result["status"] == "waiting_for_worker"
+    assert result["reason"] == "contract marker found but expected turn marker was missing"
+
+
+def test_supervisor_loop_dynamic_review_contract_marker_mismatch_reason(tmp_path: Path):
+    controller = FakeController([])
+    controller.status_payload = {"crew": {"crew_id": "crew-1", "root_goal": "Refactor public API"}, "workers": []}
+
+    def observe_review_contract_marker_only(**kwargs):
+        controller.observed.append(kwargs)
+        if kwargs["worker_id"] == "worker-patch-risk-auditor":
+            return {
+                "snapshot": "<<<CODEX_TURN_DONE crew=crew-1 contract=patch_auditor>>>",
+                "marker_seen": False,
+                "marker": kwargs["turn_marker"],
+                "transcript_artifact": "workers/worker-patch-risk-auditor/transcript.txt",
+            }
+        return {"snapshot": f"{kwargs['worker_id']} done\n{kwargs['turn_marker']}", "marker_seen": True}
+
+    controller.observe_worker = observe_review_contract_marker_only
+    loop = CrewSupervisorLoop(controller=controller, poll_interval_seconds=0, max_observe_attempts=1)
+
+    result = loop.run(
+        repo_root=tmp_path,
+        goal="Refactor public API",
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+        spawn_policy="dynamic",
+    )
+
+    assert result["status"] == "waiting_for_worker"
+    assert result["worker_id"] == "worker-patch-risk-auditor"
     assert result["reason"] == "contract marker found but expected turn marker was missing"
 
 
