@@ -775,7 +775,7 @@ def handle_crew_command(args) -> int:
         if not event_store_path.exists():
             print(json.dumps([], ensure_ascii=False))
             return 0
-        event_store = SQLiteEventStore(event_store_path)
+        event_store = SQLiteEventStore.open_existing(event_store_path)
         print(json.dumps([event.to_dict() for event in event_store.list_stream(args.crew)], ensure_ascii=False))
         return 0
 

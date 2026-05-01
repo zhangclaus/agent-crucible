@@ -14,10 +14,26 @@ from codex_claude_orchestrator.v4.events import AgentEvent, normalize
 
 
 class SQLiteEventStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        initialize: bool = True,
+        readonly: bool = False,
+    ) -> None:
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        self._readonly = readonly
+        if initialize:
+            if readonly:
+                raise ValueError("readonly event stores cannot initialize schema")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_db()
+
+    @classmethod
+    def open_existing(cls, path: Path) -> "SQLiteEventStore":
+        if not path.exists():
+            raise FileNotFoundError(path)
+        return cls(path, initialize=False, readonly=True)
 
     def append(
         self,
@@ -105,36 +121,39 @@ class SQLiteEventStore:
 
     def list_stream(self, stream_id: str, after_sequence: int = 0) -> list[AgentEvent]:
         with self._connection() as conn:
-            rows = conn.execute(
+            rows = self._execute_read(
+                conn,
                 """
                 SELECT * FROM events
                 WHERE stream_id = ? AND sequence > ?
                 ORDER BY sequence ASC
                 """,
                 (stream_id, after_sequence),
-            ).fetchall()
+            )
         return [self._row_to_event(row) for row in rows]
 
     def list_by_turn(self, turn_id: str) -> list[AgentEvent]:
         with self._connection() as conn:
-            rows = conn.execute(
+            rows = self._execute_read(
+                conn,
                 """
                 SELECT * FROM events
                 WHERE turn_id = ?
                 ORDER BY rowid ASC
                 """,
                 (turn_id,),
-            ).fetchall()
+            )
         return [self._row_to_event(row) for row in rows]
 
     def list_all(self) -> list[AgentEvent]:
         with self._connection() as conn:
-            rows = conn.execute(
+            rows = self._execute_read(
+                conn,
                 """
                 SELECT * FROM events
                 ORDER BY rowid ASC
                 """
-            ).fetchall()
+            )
         return [self._row_to_event(row) for row in rows]
 
     def get_by_idempotency_key(self, idempotency_key: str) -> AgentEvent | None:
@@ -142,7 +161,12 @@ class SQLiteEventStore:
             return None
 
         with self._connection() as conn:
-            return self._get_by_idempotency_key(conn, idempotency_key)
+            try:
+                return self._get_by_idempotency_key(conn, idempotency_key)
+            except sqlite3.OperationalError as exc:
+                if self._is_missing_events_table(exc):
+                    return None
+                raise
 
     def _init_db(self) -> None:
         with self._connection() as conn:
@@ -197,9 +221,26 @@ class SQLiteEventStore:
                 conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
+        if self._readonly:
+            uri = f"{self.path.resolve().as_uri()}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True)
+        else:
+            conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _execute_read(
+        self,
+        conn: sqlite3.Connection,
+        statement: str,
+        parameters: tuple[Any, ...] = (),
+    ) -> list[sqlite3.Row]:
+        try:
+            return conn.execute(statement, parameters).fetchall()
+        except sqlite3.OperationalError as exc:
+            if self._is_missing_events_table(exc):
+                return []
+            raise
 
     def _insert_event(self, conn: sqlite3.Connection, event: AgentEvent) -> None:
         conn.execute(
@@ -250,6 +291,10 @@ class SQLiteEventStore:
             (stream_id,),
         ).fetchone()
         return int(row["next_sequence"])
+
+    @staticmethod
+    def _is_missing_events_table(error: sqlite3.OperationalError) -> bool:
+        return "no such table: events" in str(error).lower()
 
     def _row_to_event(self, row: sqlite3.Row) -> AgentEvent:
         return AgentEvent(

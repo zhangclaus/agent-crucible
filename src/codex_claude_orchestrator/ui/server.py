@@ -31,7 +31,7 @@ def build_v4_ui_state(repo_root: Path) -> dict:
     if not event_db.exists():
         return {"event_count": 0, "crews": []}
 
-    events = SQLiteEventStore(event_db).list_all()
+    events = SQLiteEventStore.open_existing(event_db).list_all()
     events_by_crew: dict[str, list] = {}
     for event in events:
         if event.crew_id:
@@ -354,6 +354,10 @@ def render_index_html(repo_root: Path) -> str:
         <div class="pane-head"><span>Agent Runs</span></div>
         <div id="runs" class="list"></div>
       </div>
+      <div class="pane-block">
+        <div class="pane-head"><span>V4 Crews</span><span id="v4-event-count" class="meta"></span></div>
+        <div id="v4-crews" class="list"></div>
+      </div>
     </aside>
     <main>
       <div class="tabs">
@@ -369,7 +373,7 @@ def render_index_html(repo_root: Path) -> str:
     </section>
   </div>
   <script>
-    const state = {{ sessions: [], runs: [], skills: [] }};
+    const state = {{ sessions: [], runs: [], skills: [], v4: {{ event_count: 0, crews: [] }} }};
     let selectedSession = null;
     let selectedRun = null;
     let selectedView = "session";
@@ -385,11 +389,13 @@ def render_index_html(repo_root: Path) -> str:
       state.sessions = payload.sessions || [];
       state.runs = payload.runs || [];
       state.skills = payload.skills || [];
+      state.v4 = payload.v4 || {{ event_count: 0, crews: [] }};
       if (!selectedSession && state.sessions.length) selectedSession = state.sessions[0].session_id;
       if (!selectedRun && state.runs.length) selectedRun = state.runs[0].run_id;
       if (!selectedSession && selectedRun) selectedView = "run";
       renderSessions();
       renderRuns();
+      renderV4Crews();
       renderSkills();
       await renderMain();
     }}
@@ -440,6 +446,24 @@ def render_index_html(repo_root: Path) -> str:
           await renderMain();
         }});
       }});
+    }}
+
+    function renderV4Crews() {{
+      const host = document.querySelector("#v4-crews");
+      const count = document.querySelector("#v4-event-count");
+      const v4 = state.v4 || {{ event_count: 0, crews: [] }};
+      const crews = v4.crews || [];
+      count.textContent = `${{esc(v4.event_count || 0)}} events`;
+      if (!crews.length) {{
+        host.innerHTML = '<div class="meta">No V4 crews</div>';
+        return;
+      }}
+      host.innerHTML = crews.map((crew) => `
+        <div class="item">
+          <div class="item-title">${{esc(crew.crew_id)}}</div>
+          <div class="meta">${{esc(crew.status)}} · ${{esc(crew.turn_count || 0)}} turns</div>
+        </div>
+      `).join("");
     }}
 
     function renderSkills() {{

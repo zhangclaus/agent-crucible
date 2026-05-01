@@ -64,6 +64,17 @@ def test_build_v4_ui_state_without_db_is_read_only(tmp_path: Path):
     assert not (tmp_path / ".orchestrator").exists()
 
 
+def test_build_v4_ui_state_existing_empty_db_is_read_only(tmp_path: Path):
+    event_store_path = tmp_path / ".orchestrator" / "v4" / "events.sqlite3"
+    event_store_path.parent.mkdir(parents=True)
+    event_store_path.write_bytes(b"")
+
+    state = build_v4_ui_state(tmp_path)
+
+    assert state == {"event_count": 0, "crews": []}
+    assert event_store_path.read_bytes() == b""
+
+
 def test_render_index_html_contains_operational_shell(tmp_path: Path):
     html = render_index_html(tmp_path)
 
@@ -71,6 +82,7 @@ def test_render_index_html_contains_operational_shell(tmp_path: Path):
     assert "Session Timeline" in html
     assert "OutputTrace" in html
     assert "Agent Runs" in html
+    assert "V4 Crews" in html
     assert "Pending Skills" in html
 
 

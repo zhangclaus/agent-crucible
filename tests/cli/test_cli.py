@@ -1386,6 +1386,23 @@ def test_cli_crew_events_without_v4_db_is_read_only(tmp_path):
     assert not (repo_root / ".orchestrator" / "v4" / "events.sqlite3").exists()
 
 
+def test_cli_crew_events_existing_empty_db_is_read_only(tmp_path):
+    from codex_claude_orchestrator.cli import main
+
+    repo_root = tmp_path / "repo"
+    event_store_path = repo_root / ".orchestrator" / "v4" / "events.sqlite3"
+    event_store_path.parent.mkdir(parents=True)
+    event_store_path.write_bytes(b"")
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        result = main(["crew", "events", "--repo", str(repo_root), "--crew", "crew-1"])
+
+    assert result == 0
+    assert json.loads(stdout.getvalue()) == []
+    assert event_store_path.read_bytes() == b""
+
+
 def test_cli_crew_events_missing_repo_does_not_create_state(tmp_path):
     from codex_claude_orchestrator.cli import main
 

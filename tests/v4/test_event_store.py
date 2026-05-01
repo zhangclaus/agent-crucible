@@ -163,6 +163,16 @@ def test_sqlite_event_store_list_stream_filters_after_sequence(tmp_path: Path) -
     ]
 
 
+def test_sqlite_event_store_open_existing_does_not_initialize_schema(tmp_path: Path) -> None:
+    store_path = tmp_path / "events.db"
+    store_path.write_bytes(b"")
+
+    store = SQLiteEventStore.open_existing(store_path)
+
+    assert store.list_all() == []
+    assert store_path.read_bytes() == b""
+
+
 def test_event_store_list_by_turn_preserves_append_order_across_streams(tmp_path: Path) -> None:
     store = SQLiteEventStore(tmp_path / "events.db")
 

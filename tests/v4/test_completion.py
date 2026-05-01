@@ -44,6 +44,25 @@ def test_expected_marker_completes_turn_with_artifact_evidence() -> None:
     assert decision.evidence_refs == ["artifact-1", "artifact-2"]
 
 
+def test_marker_detected_event_completes_turn_with_artifact_evidence() -> None:
+    decision = CompletionDetector.evaluate(
+        make_turn(),
+        [
+            RuntimeEvent(
+                type="marker.detected",
+                turn_id="turn-1",
+                worker_id="worker-1",
+                payload={"marker": "TURN_DONE", "source": "tmux"},
+                artifact_refs=["artifact-1"],
+            )
+        ],
+    )
+
+    assert decision.event_type == "turn.completed"
+    assert decision.reason == "expected marker detected"
+    assert decision.evidence_refs == ["artifact-1"]
+
+
 def test_contract_marker_without_expected_marker_is_inconclusive() -> None:
     decision = CompletionDetector.evaluate(
         make_turn(),

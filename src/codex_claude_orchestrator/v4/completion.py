@@ -35,7 +35,13 @@ class CompletionDetector:
             )
         )
 
-        if turn.expected_marker and turn.expected_marker in output_text:
+        marker_detected = any(
+            event.type == "marker.detected"
+            and event.payload.get("marker") == turn.expected_marker
+            for event in events
+        )
+
+        if turn.expected_marker and (turn.expected_marker in output_text or marker_detected):
             return CompletionDecision(
                 event_type="turn.completed",
                 reason="expected marker detected",
