@@ -281,6 +281,53 @@ def test_v4_supervisor_preserves_completed_turn_on_repeat(tmp_path: Path):
     assert [event.type for event in store.list_stream("crew-1")].count("turn.inconclusive") == 0
 
 
+def test_v4_supervisor_resume_does_not_redeliver_completed_turn(tmp_path: Path):
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    adapter = FakeAdapter(
+        lambda turn: [
+            RuntimeEvent(
+                type="output.chunk",
+                turn_id=turn.turn_id,
+                worker_id=turn.worker_id,
+                payload={"text": "done marker-1"},
+            )
+        ]
+    )
+    first_supervisor = V4Supervisor(
+        event_store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        adapter=adapter,
+    )
+
+    first_result = first_supervisor.run_source_turn(
+        crew_id="crew-1",
+        goal="Fix tests",
+        worker_id="worker-1",
+        round_id="round-1",
+        message="Implement",
+        expected_marker="marker-1",
+    )
+    resumed_supervisor = V4Supervisor(
+        event_store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        adapter=adapter,
+    )
+    resumed_result = resumed_supervisor.run_source_turn(
+        crew_id="crew-1",
+        goal="Fix tests",
+        worker_id="worker-1",
+        round_id="round-1",
+        message="Implement",
+        expected_marker="marker-1",
+    )
+
+    events = store.list_stream("crew-1")
+    assert first_result["status"] == "turn_completed"
+    assert resumed_result["status"] == "turn_completed"
+    assert adapter.delivered == ["round-1-worker-1-source"]
+    assert [event.type for event in events].count("turn.completed") == 1
+
+
 def test_v4_supervisor_ignores_terminal_events_from_other_crews(tmp_path: Path):
     store = SQLiteEventStore(tmp_path / "events.sqlite3")
     store.append(
