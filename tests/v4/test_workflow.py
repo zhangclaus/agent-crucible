@@ -1,5 +1,9 @@
+from pathlib import Path
+
 from codex_claude_orchestrator.crew.gates import GateResult
+from codex_claude_orchestrator.crew.readiness import ReadinessReport
 from codex_claude_orchestrator.crew.review_verdict import ReviewVerdict
+from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
 from codex_claude_orchestrator.v4.gates import GateEventBuilder
 
 
@@ -27,3 +31,103 @@ def test_gate_event_builder_builds_review_event_payload():
     assert event.type == "review.verdict"
     assert event.payload["status"] == "warn"
     assert event.payload["findings"] == ["risk"]
+
+
+def test_store_backed_gate_event_builder_appends_after_existing_crew_event(tmp_path: Path):
+    store = SQLiteEventStore(tmp_path / "events.db")
+    started = store.append(stream_id="crew-1", type="crew.started")
+    builder = GateEventBuilder(event_store=store)
+
+    scope = builder.scope_evaluated(
+        crew_id="crew-1",
+        round_id="round-1",
+        worker_id="worker-1",
+        result=GateResult(status="pass", reason="inside scope", evidence_refs=["changes.json"]),
+    )
+    review = builder.review_verdict(
+        crew_id="crew-1",
+        round_id="round-1",
+        worker_id="worker-review",
+        verdict=ReviewVerdict(
+            status="warn",
+            summary="minor",
+            findings=["risk"],
+            evidence_refs=["review.json"],
+        ),
+    )
+
+    assert [event.sequence for event in store.list_stream("crew-1")] == [1, 2, 3]
+    assert [event.event_id for event in store.list_stream("crew-1")] == [
+        started.event_id,
+        scope.event_id,
+        review.event_id,
+    ]
+
+
+def test_store_backed_gate_event_builder_dedupes_identical_payloads_and_appends_changed_payloads(
+    tmp_path: Path,
+):
+    store = SQLiteEventStore(tmp_path / "events.db")
+    builder = GateEventBuilder(event_store=store)
+
+    first = builder.scope_evaluated(
+        crew_id="crew-1",
+        round_id="round-1",
+        worker_id="worker-1",
+        result=GateResult(status="pass", reason="inside scope", evidence_refs=["changes.json"]),
+    )
+    duplicate = builder.scope_evaluated(
+        crew_id="crew-1",
+        round_id="round-1",
+        worker_id="worker-1",
+        result=GateResult(status="pass", reason="inside scope", evidence_refs=["changes.json"]),
+    )
+    changed = builder.scope_evaluated(
+        crew_id="crew-1",
+        round_id="round-1",
+        worker_id="worker-1",
+        result=GateResult(
+            status="challenge",
+            reason="outside scope",
+            evidence_refs=["changes-v2.json"],
+        ),
+    )
+
+    assert duplicate.event_id == first.event_id
+    assert changed.event_id != first.event_id
+    assert [event.sequence for event in store.list_stream("crew-1")] == [1, 2]
+
+
+def test_detached_gate_event_builder_uses_detached_stream_id():
+    event = GateEventBuilder().scope_evaluated(
+        crew_id="crew-1",
+        round_id="round-1",
+        worker_id="worker-1",
+        result=GateResult(status="pass", reason="inside scope", evidence_refs=["changes.json"]),
+    )
+
+    assert event.stream_id.startswith("detached/")
+    assert event.stream_id != "crew-1"
+
+
+def test_readiness_event_payload_uses_method_round_and_worker_ids():
+    report = ReadinessReport(
+        round_id="stale-round",
+        worker_id="stale-worker",
+        contract_id="contract-1",
+        status="ready",
+        scope_status="pass",
+        review_status="ok",
+        verification_status="pass",
+        evidence_refs=["readiness.json"],
+    )
+
+    event = GateEventBuilder().readiness_evaluated(
+        crew_id="crew-1",
+        round_id="round-1",
+        worker_id="worker-1",
+        report=report,
+    )
+
+    assert event.payload["round_id"] == "round-1"
+    assert event.payload["worker_id"] == "worker-1"
