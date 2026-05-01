@@ -1,13 +1,18 @@
+import shlex
+import sys
 from pathlib import Path
 
 from codex_claude_orchestrator.v4.adapters.verification import VerificationAdapter
 from codex_claude_orchestrator.v4.artifacts import ArtifactStore
 
 
+PYTHON = shlex.quote(sys.executable)
+
+
 def test_verification_adapter_records_passed_command(tmp_path: Path):
     adapter = VerificationAdapter(artifact_store=ArtifactStore(tmp_path / "artifacts"))
 
-    result = adapter.run(command=".venv/bin/python -c 'print(123)'", cwd=tmp_path, verification_id="verification-1")
+    result = adapter.run(command=f"{PYTHON} -c 'print(123)'", cwd=tmp_path, verification_id="verification-1")
 
     assert result["passed"] is True
     assert result["exit_code"] == 0
@@ -19,7 +24,7 @@ def test_verification_adapter_records_failed_command(tmp_path: Path):
     adapter = VerificationAdapter(artifact_store=ArtifactStore(tmp_path / "artifacts"))
 
     result = adapter.run(
-        command=".venv/bin/python -c 'import sys; print(\"bad\"); sys.exit(3)'",
+        command=f"{PYTHON} -c 'import sys; print(\"bad\"); sys.exit(3)'",
         cwd=tmp_path,
         verification_id="verification-2",
     )
@@ -43,7 +48,7 @@ def test_verification_adapter_records_empty_command_setup_error(tmp_path: Path):
 def test_verification_adapter_records_malformed_quoting_setup_error(tmp_path: Path):
     adapter = VerificationAdapter(artifact_store=ArtifactStore(tmp_path / "artifacts"))
 
-    result = adapter.run(command=".venv/bin/python -c 'print(123)", cwd=tmp_path, verification_id="verification-quote")
+    result = adapter.run(command=f"{PYTHON} -c 'print(123)", cwd=tmp_path, verification_id="verification-quote")
 
     assert result["passed"] is False
     assert result["exit_code"] is None
@@ -83,7 +88,7 @@ def test_verification_adapter_records_timeout(tmp_path: Path):
     adapter = VerificationAdapter(artifact_store=ArtifactStore(tmp_path / "artifacts"), timeout_seconds=0.01)
 
     result = adapter.run(
-        command=".venv/bin/python -c 'import time; time.sleep(1)'",
+        command=f"{PYTHON} -c 'import time; time.sleep(1)'",
         cwd=tmp_path,
         verification_id="verification-timeout",
     )
