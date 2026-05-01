@@ -23,17 +23,19 @@ class CompletionDetector:
         timed_out: bool = False,
     ) -> CompletionDecision:
         output_text = "".join(
-            event.payload.get("text", "")
+            str(event.payload.get("text", ""))
             for event in events
             if event.type == "output.chunk"
         )
-        evidence_refs = [
-            artifact_ref
-            for event in events
-            for artifact_ref in event.artifact_refs
-        ]
+        evidence_refs = list(
+            dict.fromkeys(
+                artifact_ref
+                for event in events
+                for artifact_ref in event.artifact_refs
+            )
+        )
 
-        if turn.expected_marker in output_text:
+        if turn.expected_marker and turn.expected_marker in output_text:
             return CompletionDecision(
                 event_type="turn.completed",
                 reason="expected marker detected",
