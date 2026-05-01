@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from codex_claude_orchestrator.v4.events import AgentEvent
+from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
 
 
 class EventType(StrEnum):
@@ -81,3 +82,56 @@ def test_agent_event_to_dict_includes_stable_default_values() -> None:
 def test_agent_event_rejects_missing_type() -> None:
     with pytest.raises(ValueError, match="type is required"):
         AgentEvent(event_id="evt-1", stream_id="stream-1", sequence=1, type="")
+
+
+def test_sqlite_event_store_appends_sequences_per_stream_and_lists_in_order(tmp_path: Path) -> None:
+    store = SQLiteEventStore(tmp_path / "events.db")
+
+    first = store.append(stream_id="crew-1", type="crew.started", payload={"step": 1})
+    second = store.append(stream_id="crew-1", type="crew.updated", payload={"step": 2})
+    other = store.append(stream_id="worker-1", type="worker.started", payload={"step": 1})
+
+    assert first.sequence == 1
+    assert second.sequence == 2
+    assert other.sequence == 1
+    assert [event.event_id for event in store.list_stream("crew-1")] == [
+        first.event_id,
+        second.event_id,
+    ]
+
+
+def test_sqlite_event_store_idempotency_key_dedupes_to_original_event(tmp_path: Path) -> None:
+    store = SQLiteEventStore(tmp_path / "events.db")
+
+    first = store.append(
+        stream_id="crew-1",
+        type="crew.started",
+        idempotency_key="crew-1:start",
+        payload={"original": True},
+    )
+    duplicate = store.append(
+        stream_id="crew-1",
+        type="crew.started",
+        idempotency_key="crew-1:start",
+        payload={"original": False},
+    )
+
+    assert duplicate.event_id == first.event_id
+    assert duplicate.payload == {"original": True}
+    assert [event.event_id for event in store.list_stream("crew-1")] == [first.event_id]
+
+
+def test_sqlite_event_store_list_stream_filters_after_sequence(tmp_path: Path) -> None:
+    store = SQLiteEventStore(tmp_path / "events.db")
+
+    first = store.append(stream_id="crew-1", type="crew.started")
+    second = store.append(stream_id="crew-1", type="crew.updated")
+    third = store.append(stream_id="crew-1", type="crew.finished")
+
+    assert [event.event_id for event in store.list_stream("crew-1", after_sequence=1)] == [
+        second.event_id,
+        third.event_id,
+    ]
+    assert first.event_id not in [
+        event.event_id for event in store.list_stream("crew-1", after_sequence=1)
+    ]
