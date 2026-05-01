@@ -62,6 +62,47 @@ class SQLiteEventStore:
                 raise
             return event
 
+    def append_claim(
+        self,
+        *,
+        stream_id: str,
+        type: str,
+        crew_id: str = "",
+        worker_id: str = "",
+        turn_id: str = "",
+        idempotency_key: str,
+        payload: dict[str, Any] | None = None,
+        artifact_refs: list[str] | None = None,
+        created_at: str = "",
+    ) -> tuple[AgentEvent, bool]:
+        with self._write_transaction() as conn:
+            existing = self._get_by_idempotency_key(conn, idempotency_key)
+            if existing is not None:
+                return existing, False
+
+            sequence = self._next_sequence(conn, stream_id)
+            event = AgentEvent(
+                event_id=f"evt-{uuid4().hex}",
+                stream_id=stream_id,
+                sequence=sequence,
+                type=type,
+                crew_id=crew_id,
+                worker_id=worker_id,
+                turn_id=turn_id,
+                idempotency_key=idempotency_key,
+                payload=payload or {},
+                artifact_refs=artifact_refs or [],
+                created_at=created_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            )
+            try:
+                self._insert_event(conn, event)
+            except sqlite3.IntegrityError:
+                existing = self._get_by_idempotency_key(conn, idempotency_key)
+                if existing is not None:
+                    return existing, False
+                raise
+            return event, True
+
     def list_stream(self, stream_id: str, after_sequence: int = 0) -> list[AgentEvent]:
         with self._connection() as conn:
             rows = conn.execute(

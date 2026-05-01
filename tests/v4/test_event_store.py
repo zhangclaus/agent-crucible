@@ -122,6 +122,31 @@ def test_sqlite_event_store_idempotency_key_dedupes_to_original_event(tmp_path: 
     assert [event.event_id for event in store.list_stream("crew-1")] == [first.event_id]
 
 
+def test_sqlite_event_store_append_claim_reports_whether_event_was_inserted(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteEventStore(tmp_path / "events.db")
+
+    first, first_inserted = store.append_claim(
+        stream_id="crew-1",
+        type="turn.delivery_started",
+        idempotency_key="crew-1/worker-1/turn-1/source/attempt-1/delivery-started",
+        payload={"attempt": 1},
+    )
+    second, second_inserted = store.append_claim(
+        stream_id="crew-1",
+        type="turn.delivery_started",
+        idempotency_key="crew-1/worker-1/turn-1/source/attempt-1/delivery-started",
+        payload={"attempt": 2},
+    )
+
+    assert first_inserted is True
+    assert second_inserted is False
+    assert second.event_id == first.event_id
+    assert second.payload == {"attempt": 1}
+    assert store.list_stream("crew-1") == [first]
+
+
 def test_sqlite_event_store_list_stream_filters_after_sequence(tmp_path: Path) -> None:
     store = SQLiteEventStore(tmp_path / "events.db")
 

@@ -23,11 +23,13 @@ class FakeAdapter:
         self,
         *,
         delivered: bool = True,
+        marker: str | None = None,
         reason: str = "delivered",
         delay_seconds: float = 0,
     ) -> None:
         self.delivered: list[str] = []
         self._result_delivered = delivered
+        self._marker = marker
         self._reason = reason
         self._delay_seconds = delay_seconds
 
@@ -44,7 +46,7 @@ class FakeAdapter:
         self.delivered.append(turn.turn_id)
         return DeliveryResult(
             delivered=self._result_delivered,
-            marker=turn.expected_marker,
+            marker=self._marker or turn.expected_marker,
             reason=self._reason,
             artifact_refs=["artifact-1"],
         )
@@ -146,6 +148,54 @@ def test_turn_service_same_attempt_failure_replay_returns_stored_failure(
         artifact_refs=["artifact-1"],
     )
     assert adapter.delivered == ["turn-1"]
+
+
+def test_turn_service_same_attempt_failure_replay_preserves_failed_marker(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    adapter = FakeAdapter(delivered=False, marker="partial-marker", reason="marker missing")
+    service = TurnService(event_store=store, adapter=adapter)
+
+    first = service.request_and_deliver(make_turn())
+    second = service.request_and_deliver(make_turn())
+
+    assert first.marker == "partial-marker"
+    assert second == DeliveryResult(
+        delivered=False,
+        marker="partial-marker",
+        reason="marker missing",
+        artifact_refs=["artifact-1"],
+    )
+    assert adapter.delivered == ["turn-1"]
+
+
+def test_turn_service_preexisting_delivery_started_returns_in_progress(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    turn = make_turn()
+    store.append(
+        stream_id=turn.crew_id,
+        type="turn.delivery_started",
+        crew_id=turn.crew_id,
+        worker_id=turn.worker_id,
+        turn_id=turn.turn_id,
+        idempotency_key=f"{turn.idempotency_key}/attempt-{turn.attempt}/delivery-started",
+        artifact_refs=["claim-log"],
+    )
+    adapter = FakeAdapter()
+    service = TurnService(event_store=store, adapter=adapter)
+
+    result = service.request_and_deliver(turn)
+
+    assert result == DeliveryResult(
+        delivered=False,
+        marker="marker-1",
+        reason="delivery already in progress",
+        artifact_refs=["claim-log"],
+    )
+    assert adapter.delivered == []
 
 
 def test_turn_service_new_attempt_after_failure_delivers_again(tmp_path: Path) -> None:

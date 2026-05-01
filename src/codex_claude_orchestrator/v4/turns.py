@@ -31,8 +31,6 @@ class TurnService:
         with _delivery_locks_guard:
             delivery_lock = _delivery_locks[lock_key]
 
-        # This process-local guard serializes callers until SQLiteEventStore exposes
-        # an atomic claim API for cross-process delivery ownership.
         with delivery_lock:
             delivered_result = self._stored_delivered_result(turn)
             if delivered_result is not None:
@@ -42,9 +40,9 @@ class TurnService:
             if failed_result is not None:
                 return failed_result
 
-            return self._request_and_deliver_locked(turn)
+            return self._request_and_deliver_claimed(turn)
 
-    def _request_and_deliver_locked(self, turn: TurnEnvelope) -> DeliveryResult:
+    def _request_and_deliver_claimed(self, turn: TurnEnvelope) -> DeliveryResult:
         self._events.append(
             stream_id=turn.crew_id,
             type="turn.requested",
@@ -62,7 +60,7 @@ class TurnService:
             },
         )
 
-        self._events.append(
+        claim_event, inserted = self._events.append_claim(
             stream_id=turn.crew_id,
             type="turn.delivery_started",
             crew_id=turn.crew_id,
@@ -70,6 +68,21 @@ class TurnService:
             turn_id=turn.turn_id,
             idempotency_key=f"{turn.idempotency_key}/attempt-{turn.attempt}/delivery-started",
         )
+        if not inserted:
+            delivered_result = self._stored_delivered_result(turn)
+            if delivered_result is not None:
+                return delivered_result
+
+            failed_result = self._stored_failed_result(turn)
+            if failed_result is not None:
+                return failed_result
+
+            return DeliveryResult(
+                delivered=False,
+                marker=turn.expected_marker,
+                reason="delivery already in progress",
+                artifact_refs=list(claim_event.artifact_refs),
+            )
 
         result = self._adapter.deliver_turn(turn)
         if result.delivered:
@@ -91,7 +104,7 @@ class TurnService:
                 worker_id=turn.worker_id,
                 turn_id=turn.turn_id,
                 idempotency_key=f"{turn.idempotency_key}/delivery-failed/{turn.attempt}",
-                payload={"reason": result.reason},
+                payload={"marker": result.marker, "reason": result.reason},
                 artifact_refs=result.artifact_refs,
             )
 
@@ -120,7 +133,7 @@ class TurnService:
 
         return DeliveryResult(
             delivered=False,
-            marker=turn.expected_marker,
+            marker=failed_event.payload.get("marker", turn.expected_marker),
             reason=failed_event.payload.get("reason", ""),
             artifact_refs=list(failed_event.artifact_refs),
         )
