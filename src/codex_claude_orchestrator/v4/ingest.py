@@ -8,13 +8,16 @@ TURN_DONE_PREFIX = "<<<CODEX_TURN_DONE"
 
 class OutputIngestor:
     def current_turn_text(self, text: str, *, expected_marker: str) -> str:
-        before_marker = text.split(expected_marker, 1)[0]
+        before_marker = text.split(expected_marker, 1)[0] if expected_marker else text
         prior_start = before_marker.rfind(TURN_DONE_PREFIX)
-        if prior_start == -1:
+        prior_end = -1
+        while prior_start != -1:
+            prior_end = before_marker.find(">>>", prior_start)
+            if prior_end != -1:
+                break
+            prior_start = before_marker.rfind(TURN_DONE_PREFIX, 0, prior_start)
+        if prior_start == -1 or prior_end == -1:
             return before_marker
-        prior_end = before_marker.find(">>>", prior_start)
-        if prior_end == -1:
-            return before_marker[prior_start + len(TURN_DONE_PREFIX) :]
         current_text = before_marker[prior_end + len(">>>") :]
         if current_text.startswith("\r\n"):
             return current_text[2:]

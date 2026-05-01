@@ -19,6 +19,31 @@ def test_output_ingestor_slices_current_turn_after_prior_marker():
     assert current == "current output\n"
 
 
+def test_output_ingestor_ignores_incomplete_current_marker():
+    ingestor = OutputIngestor()
+    text = "current output\n<<<CODEX_TURN_DONE"
+
+    current = ingestor.current_turn_text(
+        text,
+        expected_marker="<<<CODEX_TURN_DONE crew=crew-1 worker=w phase=review round=2>>>",
+    )
+
+    assert current == text
+
+
+def test_output_ingestor_handles_empty_expected_marker():
+    ingestor = OutputIngestor()
+    text = (
+        "old review\n"
+        "<<<CODEX_TURN_DONE crew=crew-1 worker=w phase=review round=1>>>\n"
+        "current output\n"
+    )
+
+    current = ingestor.current_turn_text(text, expected_marker="")
+
+    assert current == "current output\n"
+
+
 def test_output_ingestor_builds_chunk_events():
     ingestor = OutputIngestor()
 
