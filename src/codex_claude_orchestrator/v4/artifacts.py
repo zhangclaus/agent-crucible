@@ -26,9 +26,10 @@ class ArtifactStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def write_json(self, artifact_path: str, payload: Any) -> ArtifactRef:
-        path = self._resolve(artifact_path)
+        content = json.dumps(payload, allow_nan=False, ensure_ascii=False, sort_keys=True)
+        path = self._resolve_for_write(artifact_path)
         path.write_text(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            content,
             encoding="utf-8",
         )
         return ArtifactRef(path=artifact_path, media_type="application/json")
@@ -39,7 +40,7 @@ class ArtifactStore:
         content: str,
         media_type: str = "text/plain",
     ) -> ArtifactRef:
-        path = self._resolve(artifact_path)
+        path = self._resolve_for_write(artifact_path)
         path.write_text(content, encoding="utf-8")
         return ArtifactRef(path=artifact_path, media_type=media_type)
 
@@ -55,5 +56,9 @@ class ArtifactStore:
         if not resolved.is_relative_to(self.root):
             raise ValueError("artifact path must be relative")
 
+        return resolved
+
+    def _resolve_for_write(self, artifact_path: str) -> Path:
+        resolved = self._resolve(artifact_path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         return resolved

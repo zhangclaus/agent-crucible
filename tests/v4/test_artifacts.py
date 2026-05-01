@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,24 @@ def test_artifact_store_writes_json_and_text_artifacts(tmp_path: Path) -> None:
         json.dumps({"z": "雪", "a": 1}, ensure_ascii=False, sort_keys=True)
     )
     assert store.read_text("crew-1/logs/output.txt") == "hello\n世界"
+
+
+def test_artifact_store_rejects_non_finite_json_without_creating_artifact(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+
+    with pytest.raises(ValueError):
+        store.write_json("crew-1/non-finite.json", {"value": math.nan})
+
+    assert not (tmp_path / "artifacts" / "crew-1" / "non-finite.json").exists()
+
+
+def test_artifact_store_read_missing_text_does_not_create_parent_dirs(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+
+    with pytest.raises(FileNotFoundError):
+        store.read_text("logs/missing.txt")
+
+    assert not (tmp_path / "artifacts" / "logs").exists()
 
 
 @pytest.mark.parametrize("artifact_path", ["", "/absolute.txt", "crew/../secret.txt"])
