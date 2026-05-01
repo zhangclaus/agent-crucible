@@ -71,3 +71,36 @@ def test_projection_keeps_terminal_status_after_later_turn_event(
 
     assert projection.status == expected_status
     assert projection.turns["turn-1"].status == "completed"
+
+
+def test_projection_rejects_mixed_crew_ids_but_ignores_empty_crew_id():
+    events = [
+        AgentEvent(
+            event_id="evt-1",
+            stream_id="global",
+            sequence=1,
+            type="turn.requested",
+            worker_id="worker-1",
+            turn_id="turn-1",
+        ),
+        AgentEvent(
+            event_id="evt-2",
+            stream_id="crew-1",
+            sequence=2,
+            type="crew.started",
+            crew_id="crew-1",
+            payload={"goal": "Fix tests"},
+        ),
+        AgentEvent(
+            event_id="evt-3",
+            stream_id="crew-2",
+            sequence=3,
+            type="turn.completed",
+            crew_id="crew-2",
+            worker_id="worker-2",
+            turn_id="turn-2",
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="mixed crew ids"):
+        CrewProjection.from_events(events)

@@ -27,6 +27,10 @@ class CrewProjection:
         projection = cls()
         for event in events:
             if event.crew_id:
+                if projection.crew_id and event.crew_id != projection.crew_id:
+                    raise ValueError(
+                        f"mixed crew ids in projection events: {projection.crew_id}, {event.crew_id}"
+                    )
                 projection.crew_id = event.crew_id
             if event.type == "crew.started":
                 projection.status = "running"
