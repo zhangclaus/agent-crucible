@@ -15,17 +15,16 @@ class V4WorkflowEngine:
     def start_crew(self, *, crew_id: str, goal: str) -> AgentEvent:
         existing = self._events.get_by_idempotency_key(f"{crew_id}/crew.started")
         if existing is not None:
-            if existing.payload.get("goal") != goal:
-                raise ValueError("crew already started with different goal")
-            return existing
+            return self._validate_crew_goal(existing, goal=goal)
 
-        return self._events.append(
+        event = self._events.append(
             stream_id=crew_id,
             type="crew.started",
             crew_id=crew_id,
             idempotency_key=f"{crew_id}/crew.started",
             payload={"goal": goal},
         )
+        return self._validate_crew_goal(event, goal=goal)
 
     def require_human(
         self,
@@ -58,6 +57,11 @@ class V4WorkflowEngine:
             payload=payload,
             artifact_refs=artifact_refs,
         )
+
+    def _validate_crew_goal(self, event: AgentEvent, *, goal: str) -> AgentEvent:
+        if event.payload.get("goal") != goal:
+            raise ValueError("crew already started with different goal")
+        return event
 
 
 def _content_digest(*, payload: dict[str, Any], artifact_refs: list[str]) -> str:

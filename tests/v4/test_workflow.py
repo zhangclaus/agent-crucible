@@ -4,6 +4,7 @@ from codex_claude_orchestrator.crew.gates import GateResult
 from codex_claude_orchestrator.crew.readiness import ReadinessReport
 from codex_claude_orchestrator.crew.review_verdict import ReviewVerdict
 from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
+from codex_claude_orchestrator.v4.events import AgentEvent
 from codex_claude_orchestrator.v4.gates import GateEventBuilder
 from codex_claude_orchestrator.v4.workflow import V4WorkflowEngine
 
@@ -161,6 +162,32 @@ def test_workflow_engine_rejects_changed_crew_goal(tmp_path: Path):
     events = store.list_stream("crew-1")
     assert [event.type for event in events] == ["crew.started"]
     assert events[0].payload["goal"] == "Fix tests"
+
+
+def test_workflow_engine_revalidates_crew_goal_after_append_dedupe():
+    class RacingEventStore:
+        def get_by_idempotency_key(self, idempotency_key: str) -> None:
+            return None
+
+        def append(self, **kwargs: object) -> AgentEvent:
+            return AgentEvent(
+                event_id="evt-existing",
+                stream_id="crew-1",
+                sequence=1,
+                type="crew.started",
+                crew_id="crew-1",
+                idempotency_key="crew-1/crew.started",
+                payload={"goal": "Fix tests"},
+            )
+
+    engine = V4WorkflowEngine(event_store=RacingEventStore())
+
+    try:
+        engine.start_crew(crew_id="crew-1", goal="Ship feature")
+    except ValueError as exc:
+        assert str(exc) == "crew already started with different goal"
+    else:
+        raise AssertionError("expected append-deduped crew goal conflict to be rejected")
 
 
 def test_workflow_engine_records_human_required(tmp_path: Path):
