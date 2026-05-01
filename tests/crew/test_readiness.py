@@ -89,3 +89,19 @@ def test_readiness_evaluator_challenges_failed_verification():
     assert report.verification_status == "fail"
     assert report.blockers == ["command failed"]
     assert "stderr.txt" in report.evidence_refs
+
+
+def test_readiness_evaluator_challenges_verification_without_explicit_pass_flag():
+    report = CrewReadinessEvaluator().evaluate(
+        round_id="round-1",
+        worker_id="worker-source",
+        contract_id="contract-source",
+        changed_files=[],
+        scope_result=GateResult(status="pass", reason="no changed files"),
+        review_verdict=None,
+        verification_results=[{"summary": "verification result missing pass flag"}],
+    )
+
+    assert report.verification_status == "fail"
+    assert report.status == "challenge"
+    assert "verification result missing pass flag" in report.blockers

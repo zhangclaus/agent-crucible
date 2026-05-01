@@ -81,7 +81,7 @@ class CrewReadinessEvaluator:
         for result in verification_results:
             self._append_artifact_ref(evidence_refs, result, "stdout_artifact")
             self._append_artifact_ref(evidence_refs, result, "stderr_artifact")
-            if result.get("passed") is False:
+            if result.get("passed") is not True:
                 blockers.append(str(result.get("summary", "verification failed")))
 
         status = self._readiness_status(
@@ -108,7 +108,7 @@ class CrewReadinessEvaluator:
     def _verification_status(self, verification_results: list[dict[str, Any]]) -> str:
         if not verification_results:
             return "skipped"
-        if any(result.get("passed") is False for result in verification_results):
+        if any(result.get("passed") is not True for result in verification_results):
             return "fail"
         return "pass"
 
