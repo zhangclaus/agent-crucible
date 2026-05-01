@@ -369,6 +369,83 @@ def test_supervisor_loop_dynamic_spawns_patch_auditor_after_source_patch(tmp_pat
     assert any(event.get("label") == "patch-risk-auditor" for event in result["events"])
 
 
+def test_supervisor_loop_dynamic_ready_result_includes_readiness_artifact(tmp_path: Path):
+    controller = FakeController(
+        [
+            {
+                "passed": True,
+                "summary": "command passed: exit code 0",
+                "stdout_artifact": "verification/round-1/stdout.txt",
+            }
+        ]
+    )
+    controller.status_payload = {"crew": {"crew_id": "crew-1", "root_goal": "Refactor public API"}, "workers": []}
+    loop = CrewSupervisorLoop(controller=controller, poll_interval_seconds=0, max_observe_attempts=1)
+
+    result = loop.run(
+        repo_root=tmp_path,
+        goal="Refactor public API",
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+        spawn_policy="dynamic",
+    )
+
+    readiness_artifact = next(item for item in controller.artifacts if item["artifact_name"] == "readiness/round-1.json")
+    readiness_payload = readiness_artifact["payload"]
+    assert result["status"] == "ready_for_codex_accept"
+    assert result["readiness_artifact"] == "readiness/round-1.json"
+    assert result["warnings"] == []
+    assert readiness_payload["status"] == "ready"
+    assert readiness_payload["verification_status"] == "pass"
+    assert any(
+        event == {
+            "action": "readiness_evaluated",
+            "round": 1,
+            "status": "ready",
+            "artifact": "readiness/round-1.json",
+        }
+        for event in result["events"]
+    )
+
+
+def test_supervisor_loop_dynamic_verification_failure_writes_readiness_artifact(tmp_path: Path):
+    controller = FakeController(
+        [
+            {
+                "passed": False,
+                "summary": "pytest failed: exit code 1",
+                "stderr_artifact": "verification/round-1/stderr.txt",
+            }
+        ]
+    )
+    controller.status_payload = {"crew": {"crew_id": "crew-1", "root_goal": "Refactor public API"}, "workers": []}
+    loop = CrewSupervisorLoop(controller=controller, poll_interval_seconds=0, max_observe_attempts=1)
+
+    result = loop.run(
+        repo_root=tmp_path,
+        goal="Refactor public API",
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+        spawn_policy="dynamic",
+    )
+
+    readiness_artifact = next(item for item in controller.artifacts if item["artifact_name"] == "readiness/round-1.json")
+    readiness_payload = readiness_artifact["payload"]
+    assert result["status"] == "max_rounds_exhausted"
+    assert readiness_payload["status"] == "challenge"
+    assert readiness_payload["verification_status"] == "fail"
+    assert "pytest failed: exit code 1" in readiness_payload["blockers"]
+    assert any(
+        event == {
+            "action": "readiness_evaluated",
+            "round": 1,
+            "status": "challenge",
+            "artifact": "readiness/round-1.json",
+        }
+        for event in result["events"]
+    )
+
+
 def test_supervisor_loop_dynamic_records_decisions_for_spawn_review_and_accept(tmp_path: Path):
     controller = FakeController([{"passed": True, "summary": "command passed: exit code 0"}])
     controller.status_payload = {"crew": {"crew_id": "crew-1", "root_goal": "Refactor public API"}, "workers": []}

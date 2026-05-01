@@ -251,6 +251,7 @@ class CrewSupervisorLoop:
                 events.append({"action": "challenge", "round": round_index, "summary": summary})
                 continue
             review_status = None
+            review_verdict = None
             if changes.get("changed_files"):
                 review_action = policy.decide(
                     {
@@ -451,6 +452,23 @@ class CrewSupervisorLoop:
                 for command in verification_commands
             ]
             events.append({"action": "verify", "round": round_index, "results": verification_results})
+            readiness, readiness_artifact = self._write_readiness_report(
+                crew_id=crew_id,
+                round_index=round_index,
+                worker=source_worker,
+                changes=changes,
+                scope_result=scope_result,
+                review_verdict=review_verdict,
+                verification_results=verification_results,
+            )
+            events.append(
+                {
+                    "action": "readiness_evaluated",
+                    "round": round_index,
+                    "status": readiness.status,
+                    "artifact": readiness_artifact,
+                }
+            )
             failed = [result for result in verification_results if not result.get("passed", False)]
             if not failed:
                 accept_action = DecisionAction(
@@ -467,6 +485,8 @@ class CrewSupervisorLoop:
                     "status": "ready_for_codex_accept",
                     "rounds": round_index,
                     "events": events,
+                    "readiness_artifact": readiness_artifact,
+                    "warnings": readiness.warnings,
                 }
 
             verification_failures.extend(failed)
@@ -779,6 +799,7 @@ class CrewSupervisorLoop:
         changes: dict[str, Any],
         scope_result: GateResult,
         review_verdict: ReviewVerdict | None = None,
+        verification_results: list[dict[str, Any]] | None = None,
     ):
         report = self._readiness_evaluator.evaluate(
             round_id=f"round-{round_index}",
@@ -787,7 +808,7 @@ class CrewSupervisorLoop:
             changed_files=changes.get("changed_files", []),
             scope_result=scope_result,
             review_verdict=review_verdict,
-            verification_results=[],
+            verification_results=verification_results or [],
         )
         artifact_name = self._write_json_artifact_if_supported(
             crew_id=crew_id,
