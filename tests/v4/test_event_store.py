@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -198,6 +199,56 @@ def test_sqlite_event_store_open_existing_does_not_initialize_schema(tmp_path: P
 
     assert store.list_all() == []
     assert store_path.read_bytes() == b""
+
+
+def test_sqlite_event_store_open_existing_reads_old_schema_without_round_contract(tmp_path: Path) -> None:
+    store_path = tmp_path / "events.db"
+    with sqlite3.connect(store_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY,
+                stream_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                crew_id TEXT NOT NULL DEFAULT '',
+                worker_id TEXT NOT NULL DEFAULT '',
+                turn_id TEXT NOT NULL DEFAULT '',
+                idempotency_key TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL,
+                artifact_refs_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (stream_id, sequence)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO events (
+                event_id, stream_id, sequence, type, crew_id, worker_id, turn_id,
+                idempotency_key, payload_json, artifact_refs_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "evt-1",
+                "crew-1",
+                1,
+                "crew.started",
+                "crew-1",
+                "",
+                "",
+                "",
+                "{}",
+                "[]",
+                "2026-05-02T00:00:00Z",
+            ),
+        )
+
+    store = SQLiteEventStore.open_existing(store_path)
+    event = store.list_all()[0]
+
+    assert event.round_id == ""
+    assert event.contract_id == ""
 
 
 def test_event_store_list_by_turn_preserves_append_order_across_streams(tmp_path: Path) -> None:

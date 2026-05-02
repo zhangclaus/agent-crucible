@@ -26,10 +26,47 @@ def test_outbox_watcher_emits_evidence_not_terminal_turn_event(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    events = list(OutboxWatcher().watch(turn_id="turn-1", worker_id="worker-1", outbox_path=outbox))
+    events = list(
+        OutboxWatcher().watch(
+            crew_id="crew-1",
+            turn_id="turn-1",
+            worker_id="worker-1",
+            outbox_path=outbox,
+            artifact_ref="workers/worker-1/outbox/turn-1.json",
+        )
+    )
 
     assert [event.type for event in events] == ["worker.outbox.detected"]
     assert events[0].payload["valid"] is True
+    assert events[0].artifact_refs == ["workers/worker-1/outbox/turn-1.json"]
+
+
+def test_outbox_watcher_rejects_mismatched_identity(tmp_path: Path) -> None:
+    outbox = tmp_path / "turn-1.json"
+    outbox.write_text(
+        json.dumps(
+            {
+                "crew_id": "crew-1",
+                "worker_id": "other-worker",
+                "turn_id": "turn-1",
+                "status": "completed",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    events = list(
+        OutboxWatcher().watch(
+            crew_id="crew-1",
+            turn_id="turn-1",
+            worker_id="worker-1",
+            outbox_path=outbox,
+            artifact_ref="workers/worker-1/outbox/turn-1.json",
+        )
+    )
+
+    assert events[0].payload["valid"] is False
+    assert "worker_id does not match watched worker" in events[0].payload["validation_errors"]
 
 
 def test_outbox_watcher_reports_invalid_outbox_as_evidence(tmp_path: Path) -> None:
@@ -41,6 +78,7 @@ def test_outbox_watcher_reports_invalid_outbox_as_evidence(tmp_path: Path) -> No
     assert [event.type for event in events] == ["worker.outbox.detected"]
     assert events[0].payload["valid"] is False
     assert "error" in events[0].payload
+    assert not Path(events[0].artifact_refs[0]).is_absolute()
 
 
 def test_transcript_tail_watcher_emits_incremental_output(tmp_path: Path) -> None:
@@ -52,10 +90,12 @@ def test_transcript_tail_watcher_emits_incremental_output(tmp_path: Path) -> Non
         worker_id="worker-1",
         transcript_path=transcript,
         offset=0,
+        artifact_ref="workers/worker-1/transcript.txt",
     )
 
     assert [event.type for event in events] == ["runtime.output.appended"]
     assert events[0].payload["text"] == "hello\nworld\n"
+    assert events[0].artifact_refs == ["workers/worker-1/transcript.txt"]
     assert offset == len("hello\nworld\n".encode("utf-8"))
 
 

@@ -45,6 +45,10 @@ class TurnEnvelope:
     contract_id: str = ""
     completion_mode: str = "structured_required"
     requires_structured_result: bool = True
+    unread_inbox_digest: str = ""
+    unread_message_ids: list[str] = field(default_factory=list)
+    open_protocol_requests: list[dict[str, Any]] = field(default_factory=list)
+    open_protocol_requests_digest: str = ""
     deadline_at: str = ""
     attempt: int = 1
 

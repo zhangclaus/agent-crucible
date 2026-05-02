@@ -34,6 +34,8 @@ class PostgresEventStoreConfig:
     user: str = DEFAULT_PG_USER
     port: int = DEFAULT_PG_PORT
     password: str | None = None
+    allow_default_endpoint: bool = False
+    using_default_endpoint: bool = True
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "PostgresEventStoreConfig":
@@ -42,12 +44,15 @@ class PostgresEventStoreConfig:
             port = int(env.get("PG_PORT", str(DEFAULT_PG_PORT)))
         except ValueError as exc:
             raise PostgresConfigurationError("PG_PORT must be an integer") from exc
+        explicit_endpoint = all(env.get(name) for name in ("PG_HOST", "PG_DB", "PG_USER"))
         return cls(
             host=env.get("PG_HOST", DEFAULT_PG_HOST),
             database=env.get("PG_DB", DEFAULT_PG_DB),
             user=env.get("PG_USER", DEFAULT_PG_USER),
             port=port,
             password=env.get("PG_PASSWORD") or None,
+            allow_default_endpoint=env.get("PG_ALLOW_DEFAULT_ENDPOINT", "").lower() in {"1", "true", "yes", "y"},
+            using_default_endpoint=not explicit_endpoint,
         )
 
     def require_password(self) -> str:
@@ -56,6 +61,10 @@ class PostgresEventStoreConfig:
         return self.password
 
     def connect_kwargs(self) -> dict[str, Any]:
+        if self.using_default_endpoint and not self.allow_default_endpoint:
+            raise PostgresConfigurationError(
+                "PG_ALLOW_DEFAULT_ENDPOINT=1 is required when PG_HOST, PG_DB, or PG_USER use deployment defaults"
+            )
         return {
             "host": self.host,
             "dbname": self.database,

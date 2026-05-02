@@ -217,7 +217,7 @@ def test_valid_outbox_evidence_completes_structured_turn() -> None:
                 type="worker.outbox.detected",
                 turn_id="turn-1",
                 worker_id="worker-1",
-                payload={"valid": True},
+                payload={"valid": True, "status": "completed"},
                 artifact_refs=["workers/worker-1/outbox/turn-1.json"],
             )
         ],
@@ -226,6 +226,42 @@ def test_valid_outbox_evidence_completes_structured_turn() -> None:
     assert decision.event_type == "turn.completed"
     assert decision.reason == "valid outbox result detected"
     assert decision.evidence_refs == ["workers/worker-1/outbox/turn-1.json"]
+
+
+def test_failed_outbox_evidence_fails_structured_turn() -> None:
+    decision = CompletionDetector.evaluate(
+        replace(make_turn(), requires_structured_result=True),
+        [
+            RuntimeEvent(
+                type="worker.outbox.detected",
+                turn_id="turn-1",
+                worker_id="worker-1",
+                payload={"valid": True, "status": "failed"},
+                artifact_refs=["workers/worker-1/outbox/turn-1.json"],
+            )
+        ],
+    )
+
+    assert decision.event_type == "turn.failed"
+    assert decision.reason == "outbox status failed"
+
+
+def test_blocked_and_inconclusive_outbox_evidence_are_inconclusive() -> None:
+    for status in ["blocked", "inconclusive"]:
+        decision = CompletionDetector.evaluate(
+            replace(make_turn(), requires_structured_result=True),
+            [
+                RuntimeEvent(
+                    type="worker.outbox.detected",
+                    turn_id="turn-1",
+                    worker_id="worker-1",
+                    payload={"valid": True, "status": status},
+                )
+            ],
+        )
+
+        assert decision.event_type == "turn.inconclusive"
+        assert decision.reason == f"outbox status {status}"
 
 
 def test_source_write_marker_without_outbox_is_inconclusive() -> None:

@@ -41,15 +41,31 @@ class CompletionDetector:
             for event in events
         )
 
-        outbox_detected = any(
-            event.type == "worker.outbox.detected"
-            and event.payload.get("valid") is True
-            for event in events
-        )
-        if outbox_detected:
+        for event in events:
+            if event.type != "worker.outbox.detected" or event.payload.get("valid") is not True:
+                continue
+            status = event.payload.get("status")
+            if status == "completed":
+                return CompletionDecision(
+                    event_type="turn.completed",
+                    reason="valid outbox result detected",
+                    evidence_refs=evidence_refs,
+                )
+            if status == "failed":
+                return CompletionDecision(
+                    event_type="turn.failed",
+                    reason="outbox status failed",
+                    evidence_refs=evidence_refs,
+                )
+            if status in {"blocked", "inconclusive"}:
+                return CompletionDecision(
+                    event_type="turn.inconclusive",
+                    reason=f"outbox status {status}",
+                    evidence_refs=evidence_refs,
+                )
             return CompletionDecision(
-                event_type="turn.completed",
-                reason="valid outbox result detected",
+                event_type="turn.inconclusive",
+                reason="outbox status missing",
                 evidence_refs=evidence_refs,
             )
 

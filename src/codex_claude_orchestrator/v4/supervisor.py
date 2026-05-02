@@ -22,10 +22,12 @@ class V4Supervisor:
         event_store: SQLiteEventStore,
         artifact_store: ArtifactStore,
         adapter: RuntimeAdapter,
+        turn_context_builder=None,
     ) -> None:
         self._events = event_store
         self._artifacts = artifact_store
         self._adapter = adapter
+        self._turn_context_builder = turn_context_builder
         self._turns = TurnService(event_store=event_store, adapter=adapter)
         self._workflow = V4WorkflowEngine(event_store=event_store)
         self._completion = CompletionDetector()
@@ -41,6 +43,7 @@ class V4Supervisor:
         expected_marker: str,
     ) -> dict[str, str]:
         self._workflow.start_crew(crew_id=crew_id, goal=goal)
+        context = self._build_turn_context(crew_id=crew_id, worker_id=worker_id)
         turn = TurnEnvelope(
             crew_id=crew_id,
             worker_id=worker_id,
@@ -50,6 +53,10 @@ class V4Supervisor:
             message=message,
             expected_marker=expected_marker,
             contract_id="source_write",
+            unread_inbox_digest=context.get("unread_inbox_digest", ""),
+            unread_message_ids=context.get("unread_message_ids", []),
+            open_protocol_requests=context.get("open_protocol_requests", []),
+            open_protocol_requests_digest=context.get("open_protocol_requests_digest", ""),
         )
 
         terminal_result = self._terminal_result(crew_id=crew_id, turn=turn)
@@ -126,6 +133,17 @@ class V4Supervisor:
     def _is_current_turn_event(turn: TurnEnvelope, event: RuntimeEvent) -> bool:
         return event.turn_id == turn.turn_id and event.worker_id == turn.worker_id
 
+    def _build_turn_context(self, *, crew_id: str, worker_id: str) -> dict:
+        if self._turn_context_builder is None:
+            return {}
+        context = self._turn_context_builder.build(crew_id=crew_id, worker_id=worker_id)
+        return {
+            "unread_inbox_digest": getattr(context, "unread_inbox_digest", ""),
+            "unread_message_ids": list(getattr(context, "unread_message_ids", [])),
+            "open_protocol_requests": list(getattr(context, "open_protocol_requests", [])),
+            "open_protocol_requests_digest": getattr(context, "open_protocol_requests_digest", ""),
+        }
+
     def _terminal_result(self, *, crew_id: str, turn: TurnEnvelope) -> dict[str, str] | None:
         for event in reversed(self._events.list_by_turn(turn.turn_id)):
             if event.crew_id != crew_id:
@@ -135,13 +153,6 @@ class V4Supervisor:
                     "crew_id": crew_id,
                     "status": "turn_completed",
                     "turn_id": turn.turn_id,
-                }
-            if event.type == "turn.inconclusive":
-                return {
-                    "crew_id": crew_id,
-                    "status": "waiting",
-                    "turn_id": turn.turn_id,
-                    "reason": event.payload.get("reason", ""),
                 }
             if event.type == "turn.failed":
                 return {

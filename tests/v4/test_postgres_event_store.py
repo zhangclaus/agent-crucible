@@ -42,6 +42,32 @@ def test_postgres_config_reads_environment(monkeypatch: pytest.MonkeyPatch) -> N
     assert config.user == "runner"
     assert config.password == "secret"
     assert config.port == 15432
+    assert config.allow_default_endpoint is False
+
+
+def test_postgres_store_requires_default_endpoint_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PG_HOST", raising=False)
+    monkeypatch.delenv("PG_DB", raising=False)
+    monkeypatch.delenv("PG_USER", raising=False)
+    monkeypatch.setenv("PG_PASSWORD", "secret")
+    monkeypatch.delenv("PG_ALLOW_DEFAULT_ENDPOINT", raising=False)
+
+    config = PostgresEventStoreConfig.from_env()
+
+    with pytest.raises(PostgresConfigurationError, match="PG_ALLOW_DEFAULT_ENDPOINT"):
+        config.connect_kwargs()
+
+
+def test_postgres_store_allows_default_endpoint_with_explicit_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PG_HOST", raising=False)
+    monkeypatch.delenv("PG_DB", raising=False)
+    monkeypatch.delenv("PG_USER", raising=False)
+    monkeypatch.setenv("PG_PASSWORD", "secret")
+    monkeypatch.setenv("PG_ALLOW_DEFAULT_ENDPOINT", "1")
+
+    config = PostgresEventStoreConfig.from_env()
+
+    assert config.connect_kwargs()["host"] == "124.222.58.173"
 
 
 def test_postgres_store_requires_password_before_connect(monkeypatch: pytest.MonkeyPatch) -> None:

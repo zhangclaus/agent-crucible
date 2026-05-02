@@ -11,10 +11,12 @@ class FakeAdapter:
         self.events = events or []
         self.delivery_result = delivery_result
         self.delivered = []
+        self.delivered_turns = []
         self.watched = []
 
     def deliver_turn(self, turn: TurnEnvelope):
         self.delivered.append(turn.turn_id)
+        self.delivered_turns.append(turn)
         if self.delivery_result is not None:
             return self.delivery_result
         return DeliveryResult(delivered=True, marker=turn.expected_marker, reason="sent")
@@ -33,6 +35,20 @@ def completed_outbox_event(turn: TurnEnvelope) -> RuntimeEvent:
         payload={"valid": True, "status": "completed"},
         artifact_refs=[f"workers/{turn.worker_id}/outbox/{turn.turn_id}.json"],
     )
+
+
+class FakeTurnContextBuilder:
+    def build(self, *, crew_id: str, worker_id: str):
+        return type(
+            "FakeTurnContext",
+            (),
+            {
+                "unread_inbox_digest": "unread: review this",
+                "unread_message_ids": ["msg-1"],
+                "open_protocol_requests": [{"request_id": "req-1", "subject": "Review"}],
+                "open_protocol_requests_digest": "open: Review",
+            },
+        )()
 
 
 def test_v4_supervisor_runs_until_turn_completed(tmp_path: Path):
@@ -95,6 +111,32 @@ def test_v4_supervisor_keeps_marker_only_source_turn_waiting(tmp_path: Path):
 
     assert result["status"] == "waiting"
     assert result["reason"] == "missing_outbox"
+
+
+def test_v4_supervisor_delivers_turn_context_to_worker(tmp_path: Path):
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    adapter = FakeAdapter([])
+    supervisor = V4Supervisor(
+        event_store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        adapter=adapter,
+        turn_context_builder=FakeTurnContextBuilder(),
+    )
+
+    supervisor.run_source_turn(
+        crew_id="crew-1",
+        goal="Fix tests",
+        worker_id="worker-1",
+        round_id="round-1",
+        message="Implement",
+        expected_marker="marker-1",
+    )
+
+    delivered_turn = adapter.delivered_turns[0]
+    assert delivered_turn.unread_inbox_digest == "unread: review this"
+    assert delivered_turn.unread_message_ids == ["msg-1"]
+    assert delivered_turn.open_protocol_requests == [{"request_id": "req-1", "subject": "Review"}]
+    assert delivered_turn.open_protocol_requests_digest == "open: Review"
 
 
 def test_v4_supervisor_returns_waiting_for_inconclusive_turn(tmp_path: Path):
@@ -182,15 +224,17 @@ def test_v4_supervisor_returns_waiting_when_delivery_already_in_progress(tmp_pat
     assert adapter.watched == []
 
 
-def test_v4_supervisor_preserves_inconclusive_turn_on_repeat(tmp_path: Path):
+def test_v4_supervisor_can_observe_late_outbox_after_inconclusive_turn(tmp_path: Path):
     store = SQLiteEventStore(tmp_path / "events.sqlite3")
     watches = [
         [{"text": "still working"}],
-        [{"text": "done marker-1"}],
+        ["outbox"],
     ]
 
     def events_for_turn(turn: TurnEnvelope):
         payloads = watches.pop(0)
+        if payloads == ["outbox"]:
+            return [completed_outbox_event(turn)]
         return [
             RuntimeEvent(
                 type="output.chunk",
@@ -227,11 +271,10 @@ def test_v4_supervisor_preserves_inconclusive_turn_on_repeat(tmp_path: Path):
 
     events = store.list_stream("crew-1")
     assert first_result["status"] == "waiting"
-    assert second_result["status"] == "waiting"
-    assert second_result["reason"] == "completion evidence not found"
-    assert len(adapter.watched) == 1
+    assert second_result["status"] == "turn_completed"
+    assert len(adapter.watched) == 2
     assert len(adapter.delivered) == 1
-    assert not any(event.type == "turn.completed" for event in events)
+    assert any(event.type == "turn.completed" for event in events)
 
 
 def test_v4_supervisor_dedupes_identical_runtime_observation_on_repeat(tmp_path: Path):

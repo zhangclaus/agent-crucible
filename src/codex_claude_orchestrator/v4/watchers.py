@@ -17,6 +17,7 @@ class TranscriptTailWatcher:
         worker_id: str,
         transcript_path: Path,
         offset: int = 0,
+        artifact_ref: str | None = None,
     ) -> tuple[list[RuntimeEvent], int]:
         if not transcript_path.exists():
             return [], offset
@@ -36,27 +37,42 @@ class TranscriptTailWatcher:
                 turn_id=turn_id,
                 worker_id=worker_id,
                 payload={"text": text, "offset": offset, "next_offset": next_offset},
-                artifact_refs=[str(transcript_path)],
+                artifact_refs=[_artifact_ref(transcript_path, artifact_ref)],
             )
         ], next_offset
 
 
 class OutboxWatcher:
-    def watch(self, *, turn_id: str, worker_id: str, outbox_path: Path):
+    def watch(
+        self,
+        *,
+        turn_id: str,
+        worker_id: str,
+        outbox_path: Path,
+        crew_id: str = "",
+        artifact_ref: str | None = None,
+    ):
         if not outbox_path.exists():
             return
 
         try:
             payload = json.loads(outbox_path.read_text(encoding="utf-8"))
             result = WorkerOutboxResult.from_dict(payload)
+            validation_errors = list(result.validation_errors)
+            if crew_id and result.crew_id != crew_id:
+                validation_errors.append("crew_id does not match watched crew")
+            if result.worker_id != worker_id:
+                validation_errors.append("worker_id does not match watched worker")
+            if result.turn_id != turn_id:
+                validation_errors.append("turn_id does not match watched turn")
             event_payload = {
-                "valid": result.is_valid,
+                "valid": not validation_errors,
                 "status": result.status,
                 "summary": result.summary,
                 "changed_files": result.changed_files,
                 "artifact_refs": result.artifact_refs,
                 "acknowledged_message_ids": result.acknowledged_message_ids,
-                "validation_errors": result.validation_errors,
+                "validation_errors": validation_errors,
             }
         except Exception as exc:
             event_payload = {"valid": False, "error": str(exc)}
@@ -66,7 +82,7 @@ class OutboxWatcher:
             turn_id=turn_id,
             worker_id=worker_id,
             payload=event_payload,
-            artifact_refs=[str(outbox_path)],
+            artifact_refs=[_artifact_ref(outbox_path, artifact_ref)],
         )
 
 
@@ -107,3 +123,9 @@ class TimeoutWatcher:
             worker_id=worker_id,
             payload={"deadline_at": deadline_at},
         )
+
+
+def _artifact_ref(path: Path, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    return path.as_posix() if not path.is_absolute() else path.name

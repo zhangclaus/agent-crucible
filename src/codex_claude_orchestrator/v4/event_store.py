@@ -331,6 +331,7 @@ class SQLiteEventStore:
         return "no such table: events" in str(error).lower()
 
     def _row_to_event(self, row: sqlite3.Row) -> AgentEvent:
+        keys = set(row.keys())
         return AgentEvent(
             event_id=row["event_id"],
             stream_id=row["stream_id"],
@@ -339,8 +340,8 @@ class SQLiteEventStore:
             crew_id=row["crew_id"],
             worker_id=row["worker_id"],
             turn_id=row["turn_id"],
-            round_id=row["round_id"],
-            contract_id=row["contract_id"],
+            round_id=row["round_id"] if "round_id" in keys else "",
+            contract_id=row["contract_id"] if "contract_id" in keys else "",
             idempotency_key=row["idempotency_key"],
             payload=json.loads(row["payload_json"]),
             artifact_refs=json.loads(row["artifact_refs_json"]),

@@ -59,6 +59,13 @@ class TurnService:
                 "expected_marker": turn.expected_marker,
                 "deadline_at": turn.deadline_at,
                 "attempt": turn.attempt,
+                "contract_id": turn.contract_id,
+                "completion_mode": turn.completion_mode,
+                "requires_structured_result": turn.requires_structured_result,
+                "unread_inbox_digest": turn.unread_inbox_digest,
+                "unread_message_ids": turn.unread_message_ids,
+                "open_protocol_requests": turn.open_protocol_requests,
+                "open_protocol_requests_digest": turn.open_protocol_requests_digest,
             },
         )
 
