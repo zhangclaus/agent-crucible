@@ -16,6 +16,11 @@ from codex_claude_orchestrator.v4.event_store_protocol import EventStore
 from codex_claude_orchestrator.v4.events import AgentEvent, normalize
 
 
+def _digest(value: dict[str, Any]) -> str:
+    content = json.dumps(normalize(value), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 class AdversarialEvaluator:
     def __init__(self, *, event_store: EventStore) -> None:
         self._events = event_store
@@ -113,7 +118,7 @@ class AdversarialEvaluator:
         payload: dict[str, Any],
         artifact_refs: list[str],
     ) -> str:
-        digest = self._digest(
+        digest = _digest(
             {
                 "source_event_id": source.event_id,
                 "event_type": event_type,
@@ -122,10 +127,6 @@ class AdversarialEvaluator:
             }
         )
         return f"{source.crew_id}/{source.turn_id}/{event_type}/{digest}"
-
-    def _digest(self, value: dict[str, Any]) -> str:
-        content = json.dumps(normalize(value), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 class ChallengeManager:
@@ -145,6 +146,8 @@ class ChallengeManager:
     ) -> AgentEvent:
         if challenge_event.type != "challenge.issued":
             raise ValueError("repair can only be requested from challenge.issued")
+        if challenge_event.payload.get("repair_allowed") is False:
+            raise ValueError("challenge does not allow repair")
 
         challenge_id = str(challenge_event.payload.get("challenge_id", ""))
         payload = RepairRequestPayload(
@@ -236,14 +239,10 @@ class ChallengeManager:
         payload: dict[str, Any],
         context: dict[str, Any],
     ) -> str:
-        digest = self._digest(
+        digest = _digest(
             {
                 "payload": payload,
                 "context": context,
             }
         )
         return f"{crew_id}/{challenge_id}/{event_type}/{digest}"
-
-    def _digest(self, value: dict[str, Any]) -> str:
-        content = json.dumps(normalize(value), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()

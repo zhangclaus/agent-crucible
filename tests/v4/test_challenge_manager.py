@@ -1,3 +1,5 @@
+import pytest
+
 from codex_claude_orchestrator.v4.adversarial import ChallengeManager
 from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
 
@@ -61,6 +63,34 @@ def test_challenge_manager_records_repair_completion(tmp_path):
     assert event.type == "repair.completed"
     assert event.payload["outcome"] == "fixed"
     assert event.payload["verification_event_ids"] == ["evt-verification"]
+
+
+def test_challenge_manager_rejects_repair_when_challenge_disallows_it(tmp_path):
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    challenge = store.append(
+        stream_id="crew-1",
+        type="challenge.issued",
+        crew_id="crew-1",
+        worker_id="worker-1",
+        turn_id="turn-1",
+        round_id="round-1",
+        contract_id="contract-1",
+        payload={"challenge_id": "challenge-1", "repair_allowed": False},
+    )
+    manager = ChallengeManager(event_store=store)
+
+    with pytest.raises(ValueError, match="challenge does not allow repair"):
+        manager.request_repair(
+            challenge,
+            repair_contract_id="contract-repair-1",
+            repair_turn_id="turn-repair-1",
+            worker_policy="fresh_worker",
+            allowed_write_scope=["src/**/*.py"],
+            acceptance_criteria=["Repair includes passed verification."],
+            required_outbox_path="workers/worker-2/outbox/turn-repair-1.json",
+        )
+
+    assert [event.type for event in store.list_all()] == ["challenge.issued"]
 
 
 def test_challenge_manager_dedupes_identical_repair_request(tmp_path):
