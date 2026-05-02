@@ -6,6 +6,7 @@ from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
 from codex_claude_orchestrator.v4.learning import LearningRecorder, SkillCandidateGate
 from codex_claude_orchestrator.v4.learning_projection import LearningProjection
 from codex_claude_orchestrator.v4.paths import V4Paths
+from codex_claude_orchestrator.v4.watchers import OutboxWatcher
 
 
 def test_challenge_repair_learning_flow_replays_without_terminal_output(tmp_path):
@@ -76,3 +77,60 @@ def test_challenge_repair_learning_flow_replays_without_terminal_output(tmp_path
     assert projection.active_skill_refs == []
     assert paths.learning_note_path("note-1").exists()
     assert paths.skill_candidate_path("skill-1").exists()
+
+
+def test_outbox_watcher_verification_prevents_false_challenge(tmp_path):
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    outbox_path = tmp_path / "turn-1.json"
+    outbox_path.write_text(
+        """
+        {
+          "crew_id": "crew-1",
+          "worker_id": "worker-1",
+          "turn_id": "turn-1",
+          "status": "completed",
+          "verification": [
+            {
+              "command": "pytest tests/v4 -q",
+              "status": "passed",
+              "summary": "V4 tests passed."
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+    completed = store.append(
+        stream_id="crew-1",
+        type="turn.completed",
+        crew_id="crew-1",
+        worker_id="worker-1",
+        turn_id="turn-1",
+        round_id="round-1",
+        contract_id="contract-1",
+        artifact_refs=["workers/worker-1/outbox/turn-1.json"],
+    )
+
+    for event in OutboxWatcher().watch(
+        crew_id="crew-1",
+        turn_id="turn-1",
+        worker_id="worker-1",
+        outbox_path=outbox_path,
+        artifact_ref="workers/worker-1/outbox/turn-1.json",
+    ):
+        store.append(
+            stream_id="crew-1",
+            type=event.type,
+            crew_id="crew-1",
+            worker_id=event.worker_id,
+            turn_id=event.turn_id,
+            round_id="round-1",
+            contract_id="contract-1",
+            payload=event.payload,
+            artifact_refs=event.artifact_refs,
+        )
+
+    review = AdversarialEvaluator(event_store=store).evaluate_completed_turn(completed)
+
+    assert review.type == "review.completed"
+    assert review.payload["verdict"] == "pass"

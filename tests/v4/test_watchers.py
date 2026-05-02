@@ -41,6 +41,46 @@ def test_outbox_watcher_emits_evidence_not_terminal_turn_event(tmp_path: Path) -
     assert events[0].artifact_refs == ["workers/worker-1/outbox/turn-1.json"]
 
 
+def test_outbox_watcher_preserves_verification_evidence(tmp_path: Path) -> None:
+    outbox = tmp_path / "turn-1.json"
+    outbox.write_text(
+        json.dumps(
+            {
+                "crew_id": "crew-1",
+                "worker_id": "worker-1",
+                "turn_id": "turn-1",
+                "status": "completed",
+                "verification": [
+                    {
+                        "command": "pytest tests/v4 -q",
+                        "status": "passed",
+                        "summary": "V4 tests passed.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    events = list(
+        OutboxWatcher().watch(
+            crew_id="crew-1",
+            turn_id="turn-1",
+            worker_id="worker-1",
+            outbox_path=outbox,
+            artifact_ref="workers/worker-1/outbox/turn-1.json",
+        )
+    )
+
+    assert events[0].payload["verification"] == [
+        {
+            "command": "pytest tests/v4 -q",
+            "status": "passed",
+            "summary": "V4 tests passed.",
+        }
+    ]
+
+
 def test_outbox_watcher_rejects_mismatched_identity(tmp_path: Path) -> None:
     outbox = tmp_path / "turn-1.json"
     outbox.write_text(

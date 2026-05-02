@@ -71,6 +71,7 @@ class OutboxWatcher:
                 "summary": result.summary,
                 "changed_files": result.changed_files,
                 "artifact_refs": result.artifact_refs,
+                "verification": result.verification,
                 "acknowledged_message_ids": result.acknowledged_message_ids,
                 "validation_errors": validation_errors,
             }
