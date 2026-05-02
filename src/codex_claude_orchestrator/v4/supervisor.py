@@ -9,7 +9,7 @@ from typing import Any
 from codex_claude_orchestrator.v4.artifacts import ArtifactStore
 from codex_claude_orchestrator.v4.completion import CompletionDetector
 from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
-from codex_claude_orchestrator.v4.events import normalize
+from codex_claude_orchestrator.v4.events import AgentEvent, normalize
 from codex_claude_orchestrator.v4.runtime import RuntimeAdapter, RuntimeEvent, TurnEnvelope
 from codex_claude_orchestrator.v4.turns import TurnService
 from codex_claude_orchestrator.v4.workflow import V4WorkflowEngine
@@ -122,8 +122,7 @@ class V4Supervisor:
             payload={"reason": decision.reason},
             artifact_refs=decision.evidence_refs,
         )
-        if terminal_event.type == "turn.completed" and self._adversarial_evaluator is not None:
-            self._adversarial_evaluator.evaluate_completed_turn(terminal_event)
+        self._evaluate_completed_turn_if_configured(terminal_event)
         if decision.event_type == "turn.completed":
             return {"crew_id": crew_id, "status": "turn_completed", "turn_id": turn.turn_id}
         return {
@@ -153,6 +152,7 @@ class V4Supervisor:
             if event.crew_id != crew_id:
                 continue
             if event.type == "turn.completed":
+                self._evaluate_completed_turn_if_configured(event)
                 return {
                     "crew_id": crew_id,
                     "status": "turn_completed",
@@ -180,6 +180,10 @@ class V4Supervisor:
                     "reason": event.payload.get("reason", ""),
                 }
         return None
+
+    def _evaluate_completed_turn_if_configured(self, event: AgentEvent) -> None:
+        if event.type == "turn.completed" and self._adversarial_evaluator is not None:
+            self._adversarial_evaluator.evaluate_completed_turn(event)
 
 
 def _runtime_event_digest(event: RuntimeEvent, *, index: int) -> str:

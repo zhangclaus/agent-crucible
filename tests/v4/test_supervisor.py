@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from codex_claude_orchestrator.v4.artifacts import ArtifactStore
 from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
 from codex_claude_orchestrator.v4.runtime import DeliveryResult, RuntimeEvent, TurnEnvelope
@@ -60,6 +62,17 @@ class FakeAdversarialEvaluator:
         return completed_event
 
 
+class FlakyAdversarialEvaluator:
+    def __init__(self):
+        self.completed_events = []
+
+    def evaluate_completed_turn(self, completed_event):
+        self.completed_events.append(completed_event)
+        if len(self.completed_events) == 1:
+            raise RuntimeError("evaluation failed")
+        return completed_event
+
+
 def test_v4_supervisor_runs_until_turn_completed(tmp_path: Path):
     store = SQLiteEventStore(tmp_path / "events.sqlite3")
     supervisor = V4Supervisor(
@@ -112,6 +125,51 @@ def test_v4_supervisor_invokes_adversarial_evaluator_after_turn_completed(tmp_pa
     )
 
     assert [event.type for event in evaluator.completed_events] == ["turn.completed"]
+
+
+def test_v4_supervisor_retries_adversarial_evaluator_for_existing_completed_turn(
+    tmp_path: Path,
+):
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    evaluator = FlakyAdversarialEvaluator()
+    adapter = FakeAdapter(lambda turn: [completed_outbox_event(turn)])
+    first_supervisor = V4Supervisor(
+        event_store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        adapter=adapter,
+        adversarial_evaluator=evaluator,
+    )
+
+    with pytest.raises(RuntimeError, match="evaluation failed"):
+        first_supervisor.run_source_turn(
+            crew_id="crew-1",
+            goal="Fix tests",
+            worker_id="worker-1",
+            round_id="round-1",
+            message="Implement",
+            expected_marker="marker-1",
+        )
+
+    resumed_supervisor = V4Supervisor(
+        event_store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        adapter=adapter,
+        adversarial_evaluator=evaluator,
+    )
+    result = resumed_supervisor.run_source_turn(
+        crew_id="crew-1",
+        goal="Fix tests",
+        worker_id="worker-1",
+        round_id="round-1",
+        message="Implement",
+        expected_marker="marker-1",
+    )
+
+    assert result["status"] == "turn_completed"
+    assert [event.type for event in evaluator.completed_events] == [
+        "turn.completed",
+        "turn.completed",
+    ]
 
 
 def test_v4_supervisor_does_not_invoke_adversarial_evaluator_for_waiting_turn(tmp_path: Path):
