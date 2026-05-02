@@ -38,7 +38,8 @@ def test_build_ui_state_includes_sessions_runs_and_skills(tmp_path: Path):
     assert state["skills"][0]["name"] == "ui-review"
 
 
-def test_ui_state_includes_v4_event_summary(tmp_path: Path):
+def test_ui_state_includes_v4_event_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("V4_EVENT_STORE_BACKEND", "sqlite")
     store = SQLiteEventStore(tmp_path / ".orchestrator" / "v4" / "events.sqlite3")
     store.append(stream_id="crew-1", type="crew.started", crew_id="crew-1")
     store.append(
@@ -57,14 +58,55 @@ def test_ui_state_includes_v4_event_summary(tmp_path: Path):
     assert state["v4"]["crews"][0]["turn_count"] == 1
 
 
-def test_build_v4_ui_state_without_db_is_read_only(tmp_path: Path):
+def test_build_v4_ui_state_uses_v4_event_store_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_claude_orchestrator.v4.events import AgentEvent
+
+    calls = []
+
+    class FakeStore:
+        def list_all(self):
+            return [
+                AgentEvent(
+                    event_id="evt-1",
+                    stream_id="crew-1",
+                    sequence=1,
+                    type="crew.started",
+                    crew_id="crew-1",
+                )
+            ]
+
+    def fake_factory(repo_root, *, readonly=False):
+        calls.append({"repo_root": repo_root, "readonly": readonly})
+        return FakeStore()
+
+    monkeypatch.setattr("codex_claude_orchestrator.ui.server.build_v4_event_store", fake_factory)
+
+    state = build_v4_ui_state(tmp_path)
+
+    assert state["event_count"] == 1
+    assert state["crews"][0]["crew_id"] == "crew-1"
+    assert calls == [{"repo_root": tmp_path.resolve(), "readonly": True}]
+
+
+def test_build_v4_ui_state_without_db_is_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("V4_EVENT_STORE_BACKEND", "sqlite")
     state = build_v4_ui_state(tmp_path)
 
     assert state == {"event_count": 0, "crews": []}
     assert not (tmp_path / ".orchestrator").exists()
 
 
-def test_build_v4_ui_state_existing_empty_db_is_read_only(tmp_path: Path):
+def test_build_v4_ui_state_existing_empty_db_is_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("V4_EVENT_STORE_BACKEND", "sqlite")
     event_store_path = tmp_path / ".orchestrator" / "v4" / "events.sqlite3"
     event_store_path.parent.mkdir(parents=True)
     event_store_path.write_bytes(b"")

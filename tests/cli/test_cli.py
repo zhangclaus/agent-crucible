@@ -1354,10 +1354,11 @@ def test_main_crew_run_can_use_static_legacy_worker_selection(tmp_path: Path, mo
     assert fake_loop.calls[0]["worker_roles"] == [WorkerRole.EXPLORER, WorkerRole.IMPLEMENTER, WorkerRole.REVIEWER]
 
 
-def test_cli_crew_events_lists_v4_events(tmp_path):
+def test_cli_crew_events_lists_v4_events(tmp_path, monkeypatch):
     from codex_claude_orchestrator.cli import main
     from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
 
+    monkeypatch.setenv("V4_EVENT_STORE_BACKEND", "sqlite")
     store_path = tmp_path / ".orchestrator" / "v4" / "events.sqlite3"
     store = SQLiteEventStore(store_path)
     store.append(stream_id="crew-1", type="crew.started", crew_id="crew-1", payload={"goal": "Fix tests"})
@@ -1370,9 +1371,45 @@ def test_cli_crew_events_lists_v4_events(tmp_path):
     assert "crew.started" in stdout.getvalue()
 
 
-def test_cli_crew_events_without_v4_db_is_read_only(tmp_path):
+def test_cli_crew_events_uses_v4_event_store_factory(tmp_path, monkeypatch):
+    from codex_claude_orchestrator.cli import main
+    from codex_claude_orchestrator.v4.events import AgentEvent
+
+    calls = []
+
+    class FakeStore:
+        def list_stream(self, stream_id: str, after_sequence: int = 0):
+            calls.append({"stream_id": stream_id, "after_sequence": after_sequence})
+            return [
+                AgentEvent(
+                    event_id="evt-1",
+                    stream_id=stream_id,
+                    sequence=1,
+                    type="crew.started",
+                    crew_id=stream_id,
+                )
+            ]
+
+    def fake_factory(repo_root, *, readonly=False):
+        calls.append({"repo_root": repo_root, "readonly": readonly})
+        return FakeStore()
+
+    monkeypatch.setattr("codex_claude_orchestrator.cli.build_v4_event_store", fake_factory)
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        result = main(["crew", "events", "--repo", str(tmp_path), "--crew", "crew-1"])
+
+    assert result == 0
+    assert "crew.started" in stdout.getvalue()
+    assert calls[0] == {"repo_root": tmp_path.resolve(), "readonly": True}
+    assert calls[1] == {"stream_id": "crew-1", "after_sequence": 0}
+
+
+def test_cli_crew_events_without_v4_db_is_read_only(tmp_path, monkeypatch):
     from codex_claude_orchestrator.cli import main
 
+    monkeypatch.setenv("V4_EVENT_STORE_BACKEND", "sqlite")
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
@@ -1386,9 +1423,10 @@ def test_cli_crew_events_without_v4_db_is_read_only(tmp_path):
     assert not (repo_root / ".orchestrator" / "v4" / "events.sqlite3").exists()
 
 
-def test_cli_crew_events_existing_empty_db_is_read_only(tmp_path):
+def test_cli_crew_events_existing_empty_db_is_read_only(tmp_path, monkeypatch):
     from codex_claude_orchestrator.cli import main
 
+    monkeypatch.setenv("V4_EVENT_STORE_BACKEND", "sqlite")
     repo_root = tmp_path / "repo"
     event_store_path = repo_root / ".orchestrator" / "v4" / "events.sqlite3"
     event_store_path.parent.mkdir(parents=True)

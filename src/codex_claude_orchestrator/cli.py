@@ -31,7 +31,7 @@ from codex_claude_orchestrator.session.supervisor import Supervisor
 from codex_claude_orchestrator.crew.task_graph import TaskGraphPlanner
 from codex_claude_orchestrator.runtime.tmux_console import TmuxCommandRunner, TmuxConsole, build_default_term_name
 from codex_claude_orchestrator.ui.server import run_ui_server
-from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
+from codex_claude_orchestrator.v4.event_store_factory import build_v4_event_store
 from codex_claude_orchestrator.verification.runner import VerificationRunner
 from codex_claude_orchestrator.workers.change_recorder import WorkerChangeRecorder
 from codex_claude_orchestrator.workers.pool import WorkerPool
@@ -771,11 +771,7 @@ def handle_crew_command(args) -> int:
     if args.crew_command == "events":
         if not repo_root.exists():
             raise ValueError(f"repo does not exist: {repo_root}")
-        event_store_path = repo_root / ".orchestrator" / "v4" / "events.sqlite3"
-        if not event_store_path.exists():
-            print(json.dumps([], ensure_ascii=False))
-            return 0
-        event_store = SQLiteEventStore.open_existing(event_store_path)
+        event_store = build_v4_event_store(repo_root, readonly=True)
         print(json.dumps([event.to_dict() for event in event_store.list_stream(args.crew)], ensure_ascii=False))
         return 0
 

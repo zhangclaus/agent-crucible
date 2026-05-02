@@ -10,7 +10,7 @@ from urllib.parse import unquote, urlparse
 from codex_claude_orchestrator.state.run_recorder import RunRecorder
 from codex_claude_orchestrator.state.session_recorder import SessionRecorder
 from codex_claude_orchestrator.session.skill_evolution import SkillEvolution
-from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
+from codex_claude_orchestrator.v4.event_store_factory import build_v4_event_store
 from codex_claude_orchestrator.v4.projections import CrewProjection
 
 
@@ -27,11 +27,7 @@ def build_ui_state(repo_root: Path) -> dict:
 
 
 def build_v4_ui_state(repo_root: Path) -> dict:
-    event_db = repo_root.resolve() / ".orchestrator" / "v4" / "events.sqlite3"
-    if not event_db.exists():
-        return {"event_count": 0, "crews": []}
-
-    events = SQLiteEventStore.open_existing(event_db).list_all()
+    events = build_v4_event_store(repo_root.resolve(), readonly=True).list_all()
     events_by_crew: dict[str, list] = {}
     for event in events:
         if event.crew_id:
