@@ -12,7 +12,16 @@ def test_v4_crew_runner_supervise_completes_turn_verifies_and_marks_ready(
 ) -> None:
     store = SQLiteEventStore(tmp_path / "events.sqlite3")
     controller = FakeController([{"passed": True, "summary": "command passed"}])
-    supervisor = FakeV4Supervisor([{"status": "turn_completed", "turn_id": "round-1-worker-source-source"}])
+    supervisor = FakeV4Supervisor(
+        [
+            {"status": "turn_completed", "turn_id": "round-1-worker-source-source"},
+            {"status": "turn_completed", "turn_id": "round-1-worker-review-review"},
+        ],
+        event_store=store,
+        review_summaries=[
+            "<<<CODEX_REVIEW\nverdict: OK\nsummary: patch matches spec and quality bar\nfindings:\n>>>"
+        ],
+    )
 
     result = V4CrewRunner(
         controller=controller,
@@ -35,6 +44,95 @@ def test_v4_crew_runner_supervise_completes_turn_verifies_and_marks_ready(
     assert supervisor.turns[0]["worker_id"] == "worker-source"
     assert supervisor.turns[0]["expected_marker"].startswith("<<<CODEX_TURN_DONE crew=crew-1")
     assert [event.type for event in store.list_stream("crew-1")] == [
+        "worker.outbox.detected",
+        "review.completed",
+        "verification.passed",
+        "crew.ready_for_accept",
+    ]
+
+
+def test_v4_crew_runner_runs_review_before_verification(tmp_path: Path) -> None:
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    controller = FakeController([{"passed": True, "summary": "command passed"}])
+    supervisor = FakeV4Supervisor(
+        [
+            {"status": "turn_completed", "turn_id": "round-1-worker-source-source"},
+            {"status": "turn_completed", "turn_id": "round-1-worker-review-review"},
+        ],
+        event_store=store,
+        review_summaries=[
+            "<<<CODEX_REVIEW\nverdict: OK\nsummary: patch matches spec and quality bar\nfindings:\n>>>"
+        ],
+    )
+
+    result = V4CrewRunner(
+        controller=controller,
+        supervisor=supervisor,
+        event_store=store,
+    ).supervise(
+        repo_root=tmp_path,
+        crew_id="crew-1",
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+    )
+
+    assert result["status"] == "ready_for_codex_accept"
+    assert controller.verify_called == [
+        {"crew_id": "crew-1", "command": "pytest -q", "worker_id": "worker-source"}
+    ]
+    assert [turn["worker_id"] for turn in supervisor.turns] == ["worker-source", "worker-review"]
+    assert "spec" in supervisor.turns[1]["message"].lower()
+    assert "code quality" in supervisor.turns[1]["message"].lower()
+    assert [event.type for event in store.list_stream("crew-1")] == [
+        "worker.outbox.detected",
+        "review.completed",
+        "verification.passed",
+        "crew.ready_for_accept",
+    ]
+    assert store.list_stream("crew-1")[1].payload["status"] == "ok"
+
+
+def test_v4_crew_runner_repair_loop_on_blocking_review(tmp_path: Path) -> None:
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    controller = FakeController([{"passed": True, "summary": "command passed"}])
+    supervisor = FakeV4Supervisor(
+        [
+            {"status": "turn_completed", "turn_id": "round-1-worker-source-source"},
+            {"status": "turn_completed", "turn_id": "round-1-worker-review-review"},
+            {"status": "turn_completed", "turn_id": "round-2-worker-source-source"},
+            {"status": "turn_completed", "turn_id": "round-2-worker-review-review"},
+        ],
+        event_store=store,
+        review_summaries=[
+            "<<<CODEX_REVIEW\nverdict: BLOCK\nsummary: missing regression test\nfindings:\n- Add a regression test.\n>>>",
+            "<<<CODEX_REVIEW\nverdict: OK\nsummary: blocker repaired\nfindings:\n>>>",
+        ],
+    )
+
+    result = V4CrewRunner(
+        controller=controller,
+        supervisor=supervisor,
+        event_store=store,
+    ).supervise(
+        repo_root=tmp_path,
+        crew_id="crew-1",
+        verification_commands=["pytest -q"],
+        max_rounds=2,
+    )
+
+    assert result["status"] == "ready_for_codex_accept"
+    assert controller.verify_called == [
+        {"crew_id": "crew-1", "command": "pytest -q", "worker_id": "worker-source"}
+    ]
+    assert controller.challenge_called[0]["summary"].startswith("Review BLOCK: missing regression test")
+    assert "missing regression test" in supervisor.turns[2]["message"]
+    assert [event.type for event in store.list_stream("crew-1")] == [
+        "worker.outbox.detected",
+        "review.completed",
+        "challenge.issued",
+        "repair.requested",
+        "worker.outbox.detected",
+        "review.completed",
         "verification.passed",
         "crew.ready_for_accept",
     ]
@@ -72,7 +170,16 @@ def test_v4_crew_runner_dynamic_run_starts_crew_and_spawns_source_worker(
 ) -> None:
     store = SQLiteEventStore(tmp_path / "events.sqlite3")
     controller = FakeController([{"passed": True, "summary": "command passed"}], workers=[])
-    supervisor = FakeV4Supervisor([{"status": "turn_completed", "turn_id": "round-1-worker-source-source"}])
+    supervisor = FakeV4Supervisor(
+        [
+            {"status": "turn_completed", "turn_id": "round-1-worker-source-source"},
+            {"status": "turn_completed", "turn_id": "round-1-worker-review-review"},
+        ],
+        event_store=store,
+        review_summaries=[
+            "<<<CODEX_REVIEW\nverdict: OK\nsummary: patch matches spec and quality bar\nfindings:\n>>>"
+        ],
+    )
 
     result = V4CrewRunner(
         controller=controller,
@@ -106,7 +213,7 @@ class FakeController:
         self.challenge_called = []
         self.status_payload = {
             "crew": {"crew_id": "crew-1", "root_goal": "Fix tests"},
-            "workers": workers if workers is not None else [_source_worker()],
+            "workers": workers if workers is not None else [_source_worker(), _review_worker()],
             "worker_contracts": [],
         }
 
@@ -123,7 +230,10 @@ class FakeController:
 
     def ensure_worker(self, **kwargs):
         self.ensured.append(kwargs)
-        worker = _source_worker(contract_id=kwargs["contract"].contract_id)
+        if kwargs["contract"].label == "patch-risk-auditor":
+            worker = _review_worker(contract_id=kwargs["contract"].contract_id)
+        else:
+            worker = _source_worker(contract_id=kwargs["contract"].contract_id)
         self.status_payload["workers"].append(worker)
         return worker
 
@@ -146,8 +256,16 @@ class FakeController:
 
 
 class FakeV4Supervisor:
-    def __init__(self, results: list[dict]) -> None:
+    def __init__(
+        self,
+        results: list[dict],
+        *,
+        event_store: SQLiteEventStore | None = None,
+        review_summaries: list[str] | None = None,
+    ) -> None:
         self.results = list(results)
+        self.event_store = event_store
+        self.review_summaries = list(review_summaries or [])
         self.registered = []
         self.turns = []
 
@@ -157,6 +275,23 @@ class FakeV4Supervisor:
     def run_source_turn(self, **kwargs):
         self.turns.append(kwargs)
         return self.results.pop(0)
+
+    def run_worker_turn(self, **kwargs):
+        self.turns.append(kwargs)
+        result = self.results.pop(0)
+        if kwargs.get("phase") == "review" and self.event_store is not None:
+            summary = self.review_summaries.pop(0)
+            self.event_store.append(
+                stream_id=kwargs["crew_id"],
+                type="worker.outbox.detected",
+                crew_id=kwargs["crew_id"],
+                worker_id=kwargs["worker_id"],
+                turn_id=result["turn_id"],
+                round_id=kwargs["round_id"],
+                contract_id=kwargs.get("contract_id", ""),
+                payload={"valid": True, "status": "completed", "summary": summary},
+            )
+        return result
 
 
 def _source_worker(*, contract_id: str = "source_write") -> dict:
@@ -171,4 +306,19 @@ def _source_worker(*, contract_id: str = "source_write") -> dict:
         "workspace_path": "/tmp/worker-source",
         "terminal_pane": "crew-worker-source:claude.0",
         "transcript_artifact": "workers/worker-source/transcript.txt",
+    }
+
+
+def _review_worker(*, contract_id: str = "patch_auditor") -> dict:
+    return {
+        "worker_id": "worker-review",
+        "role": WorkerRole.REVIEWER.value,
+        "label": "patch-risk-auditor",
+        "contract_id": contract_id,
+        "capabilities": ["review_patch", "inspect_code"],
+        "authority_level": "readonly",
+        "write_scope": [],
+        "workspace_path": "/tmp/worker-review",
+        "terminal_pane": "crew-worker-review:claude.0",
+        "transcript_artifact": "workers/worker-review/transcript.txt",
     }

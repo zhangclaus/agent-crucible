@@ -59,9 +59,32 @@ class V4Supervisor:
         message: str,
         expected_marker: str,
     ) -> dict[str, str]:
+        return self.run_worker_turn(
+            crew_id=crew_id,
+            goal=goal,
+            worker_id=worker_id,
+            round_id=round_id,
+            phase="source",
+            contract_id="source_write",
+            message=message,
+            expected_marker=expected_marker,
+        )
+
+    def run_worker_turn(
+        self,
+        *,
+        crew_id: str,
+        goal: str,
+        worker_id: str,
+        round_id: str,
+        phase: str,
+        contract_id: str,
+        message: str,
+        expected_marker: str,
+    ) -> dict[str, str]:
         self._workflow.start_crew(crew_id=crew_id, goal=goal)
         context = self._build_turn_context(crew_id=crew_id, worker_id=worker_id)
-        turn_id = f"{round_id}-{worker_id}-source"
+        turn_id = f"{round_id}-{worker_id}-{phase}"
         required_outbox_path = self._prepare_required_outbox_path(
             crew_id=crew_id,
             worker_id=worker_id,
@@ -72,11 +95,11 @@ class V4Supervisor:
             worker_id=worker_id,
             turn_id=turn_id,
             round_id=round_id,
-            phase="source",
+            phase=phase,
             message=message,
             expected_marker=expected_marker,
             required_outbox_path=required_outbox_path,
-            contract_id="source_write",
+            contract_id=contract_id,
             unread_inbox_digest=context.get("unread_inbox_digest", ""),
             unread_message_ids=context.get("unread_message_ids", []),
             open_protocol_requests=context.get("open_protocol_requests", []),
