@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from threading import Lock
 
-from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
+from codex_claude_orchestrator.v4.event_store_protocol import EventStore
 from codex_claude_orchestrator.v4.runtime import DeliveryResult, RuntimeAdapter, TurnEnvelope
 
 
@@ -14,7 +14,7 @@ _delivery_locks: defaultdict[tuple[str, str, int], Lock] = defaultdict(Lock)
 
 
 class TurnService:
-    def __init__(self, *, event_store: SQLiteEventStore, adapter: RuntimeAdapter) -> None:
+    def __init__(self, *, event_store: EventStore, adapter: RuntimeAdapter) -> None:
         self._events = event_store
         self._adapter = adapter
 

@@ -1026,6 +1026,19 @@ class FakeV4MergeTransaction:
         return self.response
 
 
+class FakeV4CrewRunner:
+    def __init__(self):
+        self.calls = []
+
+    def supervise(self, **kwargs):
+        self.calls.append({"method": "supervise", **kwargs})
+        return {"crew_id": kwargs["crew_id"], "status": "ready_for_codex_accept", "runtime": "v4"}
+
+    def run(self, **kwargs):
+        self.calls.append({"method": "run", **kwargs})
+        return {"crew_id": "crew-cli", "status": "ready_for_codex_accept", "runtime": "v4"}
+
+
 def test_build_parser_exposes_crew_start_and_worker_commands():
     from codex_claude_orchestrator.cli import build_parser
 
@@ -1308,13 +1321,19 @@ def test_main_crew_resume_context_prints_replay_payload(tmp_path: Path, monkeypa
     assert fake_controller.calls[0]["method"] == "resume_context"
 
 
-def test_main_crew_supervise_and_run_route_to_supervisor_loop(tmp_path: Path, monkeypatch):
+def test_main_crew_supervise_and_run_route_to_v4_crew_runner_by_default(
+    tmp_path: Path,
+    monkeypatch,
+):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     fake_controller = FakeCrewController()
-    fake_loop = FakeCrewSupervisorLoop()
+    fake_runner = FakeV4CrewRunner()
     monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_controller", lambda repo_root: fake_controller)
-    monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_supervisor_loop", lambda controller: fake_loop)
+    monkeypatch.setattr(
+        "codex_claude_orchestrator.cli.build_v4_crew_runner",
+        lambda repo_root, controller: fake_runner,
+    )
 
     stdout = StringIO()
     with redirect_stdout(stdout):
@@ -1360,8 +1379,10 @@ def test_main_crew_supervise_and_run_route_to_supervisor_loop(tmp_path: Path, mo
     assert supervise_exit == 0
     assert run_exit == 0
     assert supervise_payload["status"] == "ready_for_codex_accept"
+    assert supervise_payload["runtime"] == "v4"
     assert run_payload["crew_id"] == "crew-cli"
-    assert fake_loop.calls == [
+    assert run_payload["runtime"] == "v4"
+    assert fake_runner.calls == [
         {
             "method": "supervise",
             "repo_root": repo_root.resolve(),
@@ -1384,13 +1405,69 @@ def test_main_crew_supervise_and_run_route_to_supervisor_loop(tmp_path: Path, mo
     ]
 
 
-def test_main_crew_run_defaults_to_dynamic_even_for_review_heavy_goal(tmp_path: Path, monkeypatch):
+def test_main_crew_supervise_and_run_can_use_legacy_v3_loop(tmp_path: Path, monkeypatch):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     fake_controller = FakeCrewController()
     fake_loop = FakeCrewSupervisorLoop()
     monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_controller", lambda repo_root: fake_controller)
     monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_supervisor_loop", lambda controller: fake_loop)
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        supervise_exit = main(
+            [
+                "crew",
+                "supervise",
+                "--repo",
+                str(repo_root),
+                "--crew",
+                "crew-cli",
+                "--verification-command",
+                "pytest -q",
+                "--poll-interval",
+                "0",
+                "--legacy-loop",
+            ]
+        )
+    supervise_payload = json.loads(stdout.getvalue())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        run_exit = main(
+            [
+                "crew",
+                "run",
+                "--repo",
+                str(repo_root),
+                "--goal",
+                "Build V3 MVP",
+                "--verification-command",
+                "pytest -q",
+                "--poll-interval",
+                "0",
+                "--legacy-loop",
+            ]
+        )
+    run_payload = json.loads(stdout.getvalue())
+
+    assert supervise_exit == 0
+    assert run_exit == 0
+    assert supervise_payload["status"] == "ready_for_codex_accept"
+    assert run_payload["crew_id"] == "crew-cli"
+    assert [call["method"] for call in fake_loop.calls] == ["supervise", "run"]
+
+
+def test_main_crew_run_defaults_to_dynamic_even_for_review_heavy_goal(tmp_path: Path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    fake_controller = FakeCrewController()
+    fake_runner = FakeV4CrewRunner()
+    monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_controller", lambda repo_root: fake_controller)
+    monkeypatch.setattr(
+        "codex_claude_orchestrator.cli.build_v4_crew_runner",
+        lambda repo_root, controller: fake_runner,
+    )
 
     stdout = StringIO()
     with redirect_stdout(stdout):
@@ -1412,17 +1489,20 @@ def test_main_crew_run_defaults_to_dynamic_even_for_review_heavy_goal(tmp_path: 
     payload = json.loads(stdout.getvalue())
     assert exit_code == 0
     assert payload["spawn_policy"] == "dynamic"
-    assert fake_loop.calls[0]["spawn_policy"] == "dynamic"
-    assert "worker_roles" not in fake_loop.calls[0]
+    assert fake_runner.calls[0]["spawn_policy"] == "dynamic"
+    assert "worker_roles" not in fake_runner.calls[0]
 
 
 def test_main_crew_run_can_use_static_legacy_worker_selection(tmp_path: Path, monkeypatch):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     fake_controller = FakeCrewController()
-    fake_loop = FakeCrewSupervisorLoop()
+    fake_runner = FakeV4CrewRunner()
     monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_controller", lambda repo_root: fake_controller)
-    monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_supervisor_loop", lambda controller: fake_loop)
+    monkeypatch.setattr(
+        "codex_claude_orchestrator.cli.build_v4_crew_runner",
+        lambda repo_root, controller: fake_runner,
+    )
 
     stdout = StringIO()
     with redirect_stdout(stdout):
@@ -1447,7 +1527,7 @@ def test_main_crew_run_can_use_static_legacy_worker_selection(tmp_path: Path, mo
     assert exit_code == 0
     assert payload["selected_workers"] == ["explorer", "implementer", "reviewer"]
     assert payload["selection_mode"] == "full"
-    assert fake_loop.calls[0]["worker_roles"] == [WorkerRole.EXPLORER, WorkerRole.IMPLEMENTER, WorkerRole.REVIEWER]
+    assert fake_runner.calls[0]["worker_roles"] == [WorkerRole.EXPLORER, WorkerRole.IMPLEMENTER, WorkerRole.REVIEWER]
 
 
 def test_cli_crew_events_lists_v4_events(tmp_path, monkeypatch):

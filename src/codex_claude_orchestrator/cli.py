@@ -14,6 +14,8 @@ from codex_claude_orchestrator.bridge.claude_bridge import ClaudeBridge
 from codex_claude_orchestrator.runtime.claude_window import ClaudeWindowLauncher
 from codex_claude_orchestrator.crew.controller import CrewController
 from codex_claude_orchestrator.crew.models import WorkerRole
+from codex_claude_orchestrator.messaging.message_bus import AgentMessageBus
+from codex_claude_orchestrator.messaging.protocol_requests import ProtocolRequestStore
 from codex_claude_orchestrator.state.crew_recorder import CrewRecorder
 from codex_claude_orchestrator.crew.supervisor_loop import CrewSupervisorLoop
 from codex_claude_orchestrator.verification.crew_runner import CrewVerificationRunner
@@ -31,8 +33,14 @@ from codex_claude_orchestrator.session.supervisor import Supervisor
 from codex_claude_orchestrator.crew.task_graph import TaskGraphPlanner
 from codex_claude_orchestrator.runtime.tmux_console import TmuxCommandRunner, TmuxConsole, build_default_term_name
 from codex_claude_orchestrator.ui.server import run_ui_server
+from codex_claude_orchestrator.v4.adapters.tmux_claude import ClaudeCodeTmuxAdapter
+from codex_claude_orchestrator.v4.artifacts import ArtifactStore
+from codex_claude_orchestrator.v4.crew_runner import V4CrewRunner
 from codex_claude_orchestrator.v4.event_store_factory import build_v4_event_store
 from codex_claude_orchestrator.v4.merge_transaction import V4MergeTransaction
+from codex_claude_orchestrator.v4.message_ack import MessageAckProcessor
+from codex_claude_orchestrator.v4.supervisor import V4Supervisor
+from codex_claude_orchestrator.v4.turn_context import TurnContextBuilder
 from codex_claude_orchestrator.verification.runner import VerificationRunner
 from codex_claude_orchestrator.workers.change_recorder import WorkerChangeRecorder
 from codex_claude_orchestrator.workers.pool import WorkerPool
@@ -140,6 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     crew_run.add_argument("--max-rounds", type=int, default=3)
     crew_run.add_argument("--poll-interval", type=float, default=5.0)
     crew_run.add_argument("--allow-dirty-base", action="store_true")
+    crew_run.add_argument("--legacy-loop", action="store_true")
     crew_status = crew_subparsers.add_parser("status", help="Show crew status")
     crew_status.add_argument("--repo", required=True)
     crew_status.add_argument("--crew", required=False)
@@ -180,6 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
     crew_supervise.add_argument("--max-rounds", type=int, default=3)
     crew_supervise.add_argument("--poll-interval", type=float, default=5.0)
     crew_supervise.add_argument("--dynamic", action="store_true")
+    crew_supervise.add_argument("--legacy-loop", action="store_true")
     crew_contracts = crew_subparsers.add_parser("contracts", help="List dynamic worker contracts")
     crew_contracts.add_argument("--repo", required=True)
     crew_contracts.add_argument("--crew", required=False)
@@ -466,6 +476,34 @@ def build_v4_merge_transaction(
         recorder=recorder,
         event_store=build_v4_event_store(repo_root, readonly=False),
         stop_workers=controller.stop_workers_for_accept,
+    )
+
+
+def build_v4_crew_runner(repo_root: Path, controller: CrewController) -> V4CrewRunner:
+    recorder = CrewRecorder(repo_root / ".orchestrator")
+    message_bus = AgentMessageBus(recorder)
+    protocol_store = ProtocolRequestStore(recorder)
+    event_store = build_v4_event_store(repo_root, readonly=False)
+    supervisor = V4Supervisor(
+        event_store=event_store,
+        artifact_store=ArtifactStore(repo_root / ".orchestrator" / "v4" / "artifacts"),
+        adapter=ClaudeCodeTmuxAdapter(
+            native_session=NativeClaudeSession(open_terminal_on_start=False),
+        ),
+        turn_context_builder=TurnContextBuilder(
+            message_bus,
+            protocol_request_store=protocol_store,
+        ),
+        message_ack_processor=MessageAckProcessor(
+            event_store=event_store,
+            message_bus=message_bus,
+        ),
+        repo_root=repo_root,
+    )
+    return V4CrewRunner(
+        controller=controller,
+        supervisor=supervisor,
+        event_store=event_store,
     )
 
 
@@ -830,9 +868,9 @@ def handle_crew_command(args) -> int:
         return 0
 
     if args.crew_command == "run":
-        loop = build_crew_supervisor_loop(controller)
+        runner = build_crew_supervisor_loop(controller) if args.legacy_loop else build_v4_crew_runner(repo_root, controller)
         if args.spawn_policy == "dynamic" and args.workers == "auto":
-            result = loop.run(
+            result = runner.run(
                 repo_root=repo_root,
                 goal=args.goal,
                 verification_commands=args.verification_command,
@@ -845,7 +883,7 @@ def handle_crew_command(args) -> int:
             print(json.dumps({**result, "spawn_policy": "dynamic", "seed_contract": args.seed_contract}, ensure_ascii=False))
             return 0
         selection = build_worker_selection_policy().select(goal=args.goal, workers=args.workers, mode=args.mode)
-        result = loop.run(
+        result = runner.run(
             repo_root=repo_root,
             goal=args.goal,
             worker_roles=selection.roles,
@@ -906,12 +944,12 @@ def handle_crew_command(args) -> int:
         print(json.dumps(controller.merge_plan(crew_id=crew_id), ensure_ascii=False))
         return 0
     if args.crew_command == "supervise":
-        loop = build_crew_supervisor_loop(controller)
-        if args.dynamic:
+        runner = build_crew_supervisor_loop(controller) if args.legacy_loop else build_v4_crew_runner(repo_root, controller)
+        if args.dynamic and args.legacy_loop:
             print(
                 json.dumps(
                     {
-                        **loop.supervise_dynamic(
+                        **runner.supervise_dynamic(
                             repo_root=repo_root,
                             crew_id=crew_id,
                             verification_commands=args.verification_command,
@@ -926,12 +964,13 @@ def handle_crew_command(args) -> int:
             return 0
         print(
             json.dumps(
-                loop.supervise(
+                runner.supervise(
                     repo_root=repo_root,
                     crew_id=crew_id,
                     verification_commands=args.verification_command,
                     max_rounds=args.max_rounds,
                     poll_interval_seconds=args.poll_interval,
+                    **({"dynamic": True} if not args.legacy_loop and args.dynamic else {}),
                 ),
                 ensure_ascii=False,
             )

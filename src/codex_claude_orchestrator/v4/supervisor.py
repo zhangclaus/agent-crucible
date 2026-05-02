@@ -9,10 +9,16 @@ from typing import Any
 
 from codex_claude_orchestrator.v4.artifacts import ArtifactStore
 from codex_claude_orchestrator.v4.completion import CompletionDetector
-from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
+from codex_claude_orchestrator.v4.event_store_protocol import EventStore
 from codex_claude_orchestrator.v4.events import AgentEvent, normalize
 from codex_claude_orchestrator.v4.paths import V4Paths
-from codex_claude_orchestrator.v4.runtime import RuntimeAdapter, RuntimeEvent, TurnEnvelope
+from codex_claude_orchestrator.v4.runtime import (
+    RuntimeAdapter,
+    RuntimeEvent,
+    TurnEnvelope,
+    WorkerHandle,
+    WorkerSpec,
+)
 from codex_claude_orchestrator.v4.turns import TurnService
 from codex_claude_orchestrator.v4.workflow import V4WorkflowEngine
 
@@ -21,7 +27,7 @@ class V4Supervisor:
     def __init__(
         self,
         *,
-        event_store: SQLiteEventStore,
+        event_store: EventStore,
         artifact_store: ArtifactStore,
         adapter: RuntimeAdapter,
         turn_context_builder=None,
@@ -39,6 +45,9 @@ class V4Supervisor:
         self._turns = TurnService(event_store=event_store, adapter=adapter)
         self._workflow = V4WorkflowEngine(event_store=event_store)
         self._completion = CompletionDetector()
+
+    def register_worker(self, spec: WorkerSpec) -> WorkerHandle:
+        return self._adapter.spawn_worker(spec)
 
     def run_source_turn(
         self,

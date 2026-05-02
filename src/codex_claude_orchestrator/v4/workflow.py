@@ -4,12 +4,12 @@ import hashlib
 import json
 from typing import Any
 
-from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
+from codex_claude_orchestrator.v4.event_store_protocol import EventStore
 from codex_claude_orchestrator.v4.events import AgentEvent, normalize
 
 
 class V4WorkflowEngine:
-    def __init__(self, *, event_store: SQLiteEventStore):
+    def __init__(self, *, event_store: EventStore):
         self._events = event_store
 
     def start_crew(self, *, crew_id: str, goal: str) -> AgentEvent:

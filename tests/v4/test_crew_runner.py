@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from codex_claude_orchestrator.crew.models import WorkerRole
+from codex_claude_orchestrator.v4.crew_runner import V4CrewRunner
+from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
+
+
+def test_v4_crew_runner_supervise_completes_turn_verifies_and_marks_ready(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    controller = FakeController([{"passed": True, "summary": "command passed"}])
+    supervisor = FakeV4Supervisor([{"status": "turn_completed", "turn_id": "round-1-worker-source-source"}])
+
+    result = V4CrewRunner(
+        controller=controller,
+        supervisor=supervisor,
+        event_store=store,
+    ).supervise(
+        repo_root=tmp_path,
+        crew_id="crew-1",
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+    )
+
+    assert result["status"] == "ready_for_codex_accept"
+    assert result["runtime"] == "v4"
+    assert controller.changes_called == [{"crew_id": "crew-1", "worker_id": "worker-source"}]
+    assert controller.verify_called == [
+        {"crew_id": "crew-1", "command": "pytest -q", "worker_id": "worker-source"}
+    ]
+    assert supervisor.registered[0].worker_id == "worker-source"
+    assert supervisor.turns[0]["worker_id"] == "worker-source"
+    assert supervisor.turns[0]["expected_marker"].startswith("<<<CODEX_TURN_DONE crew=crew-1")
+    assert [event.type for event in store.list_stream("crew-1")] == [
+        "verification.passed",
+        "crew.ready_for_accept",
+    ]
+
+
+def test_v4_crew_runner_waits_without_recording_changes_when_turn_is_not_terminal(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    controller = FakeController([{"passed": True, "summary": "command passed"}])
+    supervisor = FakeV4Supervisor(
+        [{"status": "waiting", "turn_id": "round-1-worker-source-source", "reason": "missing_outbox"}]
+    )
+
+    result = V4CrewRunner(
+        controller=controller,
+        supervisor=supervisor,
+        event_store=store,
+    ).supervise(
+        repo_root=tmp_path,
+        crew_id="crew-1",
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+    )
+
+    assert result["status"] == "waiting_for_worker"
+    assert result["reason"] == "missing_outbox"
+    assert controller.changes_called == []
+    assert controller.verify_called == []
+    assert store.list_stream("crew-1") == []
+
+
+def test_v4_crew_runner_dynamic_run_starts_crew_and_spawns_source_worker(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    controller = FakeController([{"passed": True, "summary": "command passed"}], workers=[])
+    supervisor = FakeV4Supervisor([{"status": "turn_completed", "turn_id": "round-1-worker-source-source"}])
+
+    result = V4CrewRunner(
+        controller=controller,
+        supervisor=supervisor,
+        event_store=store,
+    ).run(
+        repo_root=tmp_path,
+        goal="Fix tests",
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+        spawn_policy="dynamic",
+    )
+
+    assert result["status"] == "ready_for_codex_accept"
+    assert controller.started == [{"dynamic": True, "repo_root": tmp_path, "goal": "Fix tests"}]
+    assert controller.ensured[0]["contract"].authority_level.value == "source_write"
+    assert supervisor.turns[0]["message"].startswith("Begin or continue")
+
+
+class FakeCrew:
+    crew_id = "crew-1"
+
+
+class FakeController:
+    def __init__(self, verification_results: list[dict], workers: list[dict] | None = None) -> None:
+        self.verification_results = list(verification_results)
+        self.started = []
+        self.ensured = []
+        self.changes_called = []
+        self.verify_called = []
+        self.challenge_called = []
+        self.status_payload = {
+            "crew": {"crew_id": "crew-1", "root_goal": "Fix tests"},
+            "workers": workers if workers is not None else [_source_worker()],
+            "worker_contracts": [],
+        }
+
+    def start(self, **kwargs):
+        self.started.append(kwargs)
+        return FakeCrew()
+
+    def start_dynamic(self, **kwargs):
+        self.started.append({"dynamic": True, **kwargs})
+        return FakeCrew()
+
+    def status(self, **kwargs):
+        return self.status_payload
+
+    def ensure_worker(self, **kwargs):
+        self.ensured.append(kwargs)
+        worker = _source_worker(contract_id=kwargs["contract"].contract_id)
+        self.status_payload["workers"].append(worker)
+        return worker
+
+    def changes(self, **kwargs):
+        self.changes_called.append(kwargs)
+        return {
+            "worker_id": kwargs["worker_id"],
+            "changed_files": ["src/app.py"],
+            "artifact": f"workers/{kwargs['worker_id']}/changes.json",
+            "diff_artifact": f"workers/{kwargs['worker_id']}/diff.patch",
+        }
+
+    def verify(self, **kwargs):
+        self.verify_called.append(kwargs)
+        return self.verification_results.pop(0)
+
+    def challenge(self, **kwargs):
+        self.challenge_called.append(kwargs)
+        return {"summary": kwargs["summary"]}
+
+
+class FakeV4Supervisor:
+    def __init__(self, results: list[dict]) -> None:
+        self.results = list(results)
+        self.registered = []
+        self.turns = []
+
+    def register_worker(self, spec):
+        self.registered.append(spec)
+
+    def run_source_turn(self, **kwargs):
+        self.turns.append(kwargs)
+        return self.results.pop(0)
+
+
+def _source_worker(*, contract_id: str = "source_write") -> dict:
+    return {
+        "worker_id": "worker-source",
+        "role": WorkerRole.IMPLEMENTER.value,
+        "label": "targeted-code-editor",
+        "contract_id": contract_id,
+        "capabilities": ["edit_source", "edit_tests", "run_verification"],
+        "authority_level": "source_write",
+        "write_scope": ["src/", "tests/"],
+        "workspace_path": "/tmp/worker-source",
+        "terminal_pane": "crew-worker-source:claude.0",
+        "transcript_artifact": "workers/worker-source/transcript.txt",
+    }
