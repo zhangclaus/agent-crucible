@@ -57,6 +57,7 @@ class TurnService:
                 "phase": turn.phase,
                 "message": turn.message,
                 "expected_marker": turn.expected_marker,
+                "required_outbox_path": turn.required_outbox_path,
                 "deadline_at": turn.deadline_at,
                 "attempt": turn.attempt,
                 "contract_id": turn.contract_id,

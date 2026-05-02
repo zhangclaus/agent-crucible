@@ -1,9 +1,12 @@
+import json
 from pathlib import Path
 
 import pytest
 
+from codex_claude_orchestrator.v4.adapters.tmux_claude import ClaudeCodeTmuxAdapter
 from codex_claude_orchestrator.v4.artifacts import ArtifactStore
 from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
+from codex_claude_orchestrator.v4.paths import V4Paths
 from codex_claude_orchestrator.v4.runtime import DeliveryResult, RuntimeEvent, TurnEnvelope
 from codex_claude_orchestrator.v4.supervisor import V4Supervisor
 
@@ -71,6 +74,27 @@ class FlakyAdversarialEvaluator:
         if len(self.completed_events) == 1:
             raise RuntimeError("evaluation failed")
         return completed_event
+
+
+class FakeNativeSession:
+    def __init__(self):
+        self.sent = []
+        self.observe_result = {
+            "snapshot": "",
+            "marker": "marker-1",
+            "marker_seen": False,
+            "transcript_artifact": "",
+        }
+
+    def send(self, **kwargs):
+        self.sent.append(kwargs)
+        return {
+            "marker": kwargs["turn_marker"],
+            "message": kwargs["message"],
+        }
+
+    def observe(self, **kwargs):
+        return self.observe_result
 
 
 def test_v4_supervisor_runs_until_turn_completed(tmp_path: Path):
@@ -248,6 +272,125 @@ def test_v4_supervisor_delivers_turn_context_to_worker(tmp_path: Path):
     assert delivered_turn.unread_message_ids == ["msg-1"]
     assert delivered_turn.open_protocol_requests == [{"request_id": "req-1", "subject": "Review"}]
     assert delivered_turn.open_protocol_requests_digest == "open: Review"
+
+
+def test_v4_supervisor_assigns_canonical_required_outbox_path(tmp_path: Path):
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    adapter = FakeAdapter([])
+    paths = V4Paths(repo_root=tmp_path, crew_id="crew-1")
+    supervisor = V4Supervisor(
+        event_store=store,
+        artifact_store=ArtifactStore(paths.artifact_root),
+        adapter=adapter,
+        repo_root=tmp_path,
+    )
+
+    supervisor.run_source_turn(
+        crew_id="crew-1",
+        goal="Fix tests",
+        worker_id="worker-1",
+        round_id="round-1",
+        message="Implement",
+        expected_marker="marker-1",
+    )
+
+    expected_path = paths.outbox_path("worker-1", "round-1-worker-1-source")
+    delivered_turn = adapter.delivered_turns[0]
+    requested_event = next(
+        event for event in store.list_stream("crew-1") if event.type == "turn.requested"
+    )
+    assert delivered_turn.required_outbox_path == str(expected_path)
+    assert expected_path.parent.is_dir()
+    assert requested_event.payload["required_outbox_path"] == str(expected_path)
+
+
+def test_v4_supervisor_completes_tmux_turn_from_required_outbox_without_marker(
+    tmp_path: Path,
+):
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    paths = V4Paths(repo_root=tmp_path, crew_id="crew-1")
+    outbox_path = paths.outbox_path("worker-1", "round-1-worker-1-source")
+    outbox_path.parent.mkdir(parents=True)
+    outbox_path.write_text(
+        json.dumps(
+            {
+                "crew_id": "crew-1",
+                "worker_id": "worker-1",
+                "turn_id": "round-1-worker-1-source",
+                "status": "completed",
+                "summary": "implemented",
+            }
+        ),
+        encoding="utf-8",
+    )
+    native = FakeNativeSession()
+    supervisor = V4Supervisor(
+        event_store=store,
+        artifact_store=ArtifactStore(paths.artifact_root),
+        adapter=ClaudeCodeTmuxAdapter(native_session=native),
+        repo_root=tmp_path,
+    )
+
+    result = supervisor.run_source_turn(
+        crew_id="crew-1",
+        goal="Fix tests",
+        worker_id="worker-1",
+        round_id="round-1",
+        message="Implement",
+        expected_marker="marker-1",
+    )
+
+    assert result["status"] == "turn_completed"
+    assert [event.type for event in store.list_stream("crew-1")] == [
+        "crew.started",
+        "turn.requested",
+        "turn.delivery_started",
+        "turn.delivered",
+        "worker.outbox.detected",
+        "turn.completed",
+    ]
+
+
+def test_v4_supervisor_ignores_outbox_written_outside_required_path_without_marker(
+    tmp_path: Path,
+):
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    paths = V4Paths(repo_root=tmp_path, crew_id="crew-1")
+    wrong_outbox_path = paths.outbox_path("worker-1", "other-turn")
+    wrong_outbox_path.parent.mkdir(parents=True)
+    wrong_outbox_path.write_text(
+        json.dumps(
+            {
+                "crew_id": "crew-1",
+                "worker_id": "worker-1",
+                "turn_id": "round-1-worker-1-source",
+                "status": "completed",
+                "summary": "wrong file",
+            }
+        ),
+        encoding="utf-8",
+    )
+    supervisor = V4Supervisor(
+        event_store=store,
+        artifact_store=ArtifactStore(paths.artifact_root),
+        adapter=ClaudeCodeTmuxAdapter(native_session=FakeNativeSession()),
+        repo_root=tmp_path,
+    )
+
+    result = supervisor.run_source_turn(
+        crew_id="crew-1",
+        goal="Fix tests",
+        worker_id="worker-1",
+        round_id="round-1",
+        message="Implement",
+        expected_marker="marker-1",
+    )
+
+    assert result["status"] == "waiting"
+    assert result["reason"] == "completion evidence not found"
+    assert "worker.outbox.detected" not in [
+        event.type for event in store.list_stream("crew-1")
+    ]
 
 
 def test_v4_supervisor_returns_waiting_for_inconclusive_turn(tmp_path: Path):

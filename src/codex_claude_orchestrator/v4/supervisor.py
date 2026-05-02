@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 from codex_claude_orchestrator.v4.artifacts import ArtifactStore
 from codex_claude_orchestrator.v4.completion import CompletionDetector
 from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
 from codex_claude_orchestrator.v4.events import AgentEvent, normalize
+from codex_claude_orchestrator.v4.paths import V4Paths
 from codex_claude_orchestrator.v4.runtime import RuntimeAdapter, RuntimeEvent, TurnEnvelope
 from codex_claude_orchestrator.v4.turns import TurnService
 from codex_claude_orchestrator.v4.workflow import V4WorkflowEngine
@@ -24,12 +26,14 @@ class V4Supervisor:
         adapter: RuntimeAdapter,
         turn_context_builder=None,
         adversarial_evaluator=None,
+        repo_root: str | Path | None = None,
     ) -> None:
         self._events = event_store
         self._artifacts = artifact_store
         self._adapter = adapter
         self._turn_context_builder = turn_context_builder
         self._adversarial_evaluator = adversarial_evaluator
+        self._repo_root = Path(repo_root).resolve() if repo_root is not None else None
         self._turns = TurnService(event_store=event_store, adapter=adapter)
         self._workflow = V4WorkflowEngine(event_store=event_store)
         self._completion = CompletionDetector()
@@ -46,14 +50,21 @@ class V4Supervisor:
     ) -> dict[str, str]:
         self._workflow.start_crew(crew_id=crew_id, goal=goal)
         context = self._build_turn_context(crew_id=crew_id, worker_id=worker_id)
+        turn_id = f"{round_id}-{worker_id}-source"
+        required_outbox_path = self._prepare_required_outbox_path(
+            crew_id=crew_id,
+            worker_id=worker_id,
+            turn_id=turn_id,
+        )
         turn = TurnEnvelope(
             crew_id=crew_id,
             worker_id=worker_id,
-            turn_id=f"{round_id}-{worker_id}-source",
+            turn_id=turn_id,
             round_id=round_id,
             phase="source",
             message=message,
             expected_marker=expected_marker,
+            required_outbox_path=required_outbox_path,
             contract_id="source_write",
             unread_inbox_digest=context.get("unread_inbox_digest", ""),
             unread_message_ids=context.get("unread_message_ids", []),
@@ -147,6 +158,26 @@ class V4Supervisor:
             "open_protocol_requests_digest": getattr(context, "open_protocol_requests_digest", ""),
         }
 
+    def _prepare_required_outbox_path(
+        self,
+        *,
+        crew_id: str,
+        worker_id: str,
+        turn_id: str,
+    ) -> str:
+        outbox_path = self._paths_for(crew_id).outbox_path(worker_id, turn_id)
+        outbox_path.parent.mkdir(parents=True, exist_ok=True)
+        return str(outbox_path)
+
+    def _paths_for(self, crew_id: str) -> V4Paths:
+        repo_root = self._repo_root
+        if repo_root is None:
+            repo_root = _infer_repo_root_from_artifact_root(
+                self._artifacts.root,
+                crew_id=crew_id,
+            )
+        return V4Paths(repo_root=repo_root, crew_id=crew_id)
+
     def _terminal_result(self, *, crew_id: str, turn: TurnEnvelope) -> dict[str, str] | None:
         for event in reversed(self._events.list_by_turn(turn.turn_id)):
             if event.crew_id != crew_id:
@@ -199,3 +230,12 @@ def _runtime_event_digest(event: RuntimeEvent, *, index: int) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _infer_repo_root_from_artifact_root(artifact_root: Path, *, crew_id: str) -> Path:
+    resolved = artifact_root.resolve()
+    parts = resolved.parts
+    suffix = (".orchestrator", "crews", crew_id, "artifacts", "v4")
+    if len(parts) >= len(suffix) and tuple(parts[-len(suffix):]) == suffix:
+        return Path(*parts[:-len(suffix)])
+    return resolved.parent

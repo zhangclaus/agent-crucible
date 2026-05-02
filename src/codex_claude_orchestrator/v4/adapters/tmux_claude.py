@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from codex_claude_orchestrator.v4.runtime import (
     CancellationResult,
@@ -11,6 +12,7 @@ from codex_claude_orchestrator.v4.runtime import (
     WorkerHandle,
     WorkerSpec,
 )
+from codex_claude_orchestrator.v4.watchers import OutboxWatcher
 
 
 def _non_empty_str(value) -> str:
@@ -25,6 +27,7 @@ class ClaudeCodeTmuxAdapter:
     def __init__(self, *, native_session):
         self._native_session = native_session
         self._workers: dict[str, WorkerSpec] = {}
+        self._outbox_watcher = OutboxWatcher()
 
     def register_worker(self, spec: WorkerSpec) -> WorkerHandle:
         self._workers[spec.worker_id] = spec
@@ -90,6 +93,15 @@ class ClaudeCodeTmuxAdapter:
                 },
                 artifact_refs=artifact_refs,
             )
+        required_outbox_path = _non_empty_str(turn.required_outbox_path)
+        if required_outbox_path:
+            yield from self._outbox_watcher.watch(
+                crew_id=turn.crew_id,
+                turn_id=turn.turn_id,
+                worker_id=turn.worker_id,
+                outbox_path=Path(required_outbox_path),
+                artifact_ref=_required_outbox_artifact_ref(turn),
+            )
 
     def collect_artifacts(self, turn: TurnEnvelope) -> list[str]:
         worker = self._workers.get(turn.worker_id)
@@ -129,7 +141,10 @@ def _compiled_turn_message(turn: TurnEnvelope) -> str:
                 [
                     "Unread inbox:",
                     turn.unread_inbox_digest,
-                    f"Acknowledge message ids in outbox: {', '.join(turn.unread_message_ids) or 'none'}",
+                    (
+                        "Acknowledge message ids in outbox: "
+                        f"{', '.join(turn.unread_message_ids) or 'none'}"
+                    ),
                 ]
             )
         )
@@ -138,18 +153,38 @@ def _compiled_turn_message(turn: TurnEnvelope) -> str:
             "\n".join(
                 [
                     "Open protocol requests:",
-                    turn.open_protocol_requests_digest or json.dumps(turn.open_protocol_requests, ensure_ascii=False),
+                    turn.open_protocol_requests_digest
+                    or json.dumps(turn.open_protocol_requests, ensure_ascii=False),
                 ]
             )
         )
     if turn.requires_structured_result:
-        sections.append(
-            "\n".join(
+        result_lines = [
+            "Structured result requirement:",
+            "Write a valid outbox result for this exact turn before considering the turn complete.",
+        ]
+        if turn.required_outbox_path:
+            result_lines.extend(
                 [
-                    "Structured result requirement:",
-                    "Write a valid outbox result for this exact turn before considering the turn complete.",
-                    "The outbox JSON must include crew_id, worker_id, turn_id, status, summary, changed_files, verification, acknowledged_message_ids, messages, risks, and next_suggested_action.",
+                    f"Required outbox file: {turn.required_outbox_path}",
+                    "Create the parent directory if it does not exist.",
+                    (
+                        "Only this exact outbox file is watched as structured "
+                        "completion evidence."
+                    ),
                 ]
             )
+        result_lines.append(
+            (
+                "The outbox JSON must include crew_id, worker_id, turn_id, "
+                "status, summary, changed_files, verification, "
+                "acknowledged_message_ids, messages, risks, and "
+                "next_suggested_action."
+            )
         )
+        sections.append("\n".join(result_lines))
     return "\n\n".join(section for section in sections if section)
+
+
+def _required_outbox_artifact_ref(turn: TurnEnvelope) -> str:
+    return f"workers/{turn.worker_id}/outbox/{turn.turn_id}.json"

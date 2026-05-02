@@ -42,6 +42,7 @@ class TurnEnvelope:
     phase: str
     message: str
     expected_marker: str
+    required_outbox_path: str = ""
     contract_id: str = ""
     completion_mode: str = "structured_required"
     requires_structured_result: bool = True

@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from codex_claude_orchestrator.v4.adapters.tmux_claude import ClaudeCodeTmuxAdapter
 from codex_claude_orchestrator.v4.runtime import TurnEnvelope, WorkerSpec
 
@@ -72,6 +75,28 @@ def test_tmux_adapter_includes_turn_context_in_delivered_message():
     assert "req-1" in sent_message
     assert "Required outbox identity" in sent_message
     assert "turn-1" in sent_message
+
+
+def test_tmux_adapter_includes_required_outbox_path_in_delivered_message(tmp_path: Path):
+    native = FakeNativeSession()
+    adapter = ClaudeCodeTmuxAdapter(native_session=native)
+    outbox_path = tmp_path / "workers" / "worker-1" / "outbox" / "turn-1.json"
+    turn = TurnEnvelope(
+        crew_id="crew-1",
+        worker_id="worker-1",
+        turn_id="turn-1",
+        round_id="round-1",
+        phase="source",
+        message="Implement",
+        expected_marker="marker-1",
+        required_outbox_path=str(outbox_path),
+    )
+
+    adapter.deliver_turn(turn)
+
+    sent_message = native.sent[0]["message"]
+    assert str(outbox_path) in sent_message
+    assert "Create the parent directory if it does not exist." in sent_message
 
 
 def test_tmux_adapter_unregistered_worker_uses_worker_id_as_terminal_pane():
@@ -215,6 +240,47 @@ def test_tmux_adapter_watch_turn_marker_not_seen_emits_only_output_chunk():
 
     assert [event.type for event in events] == ["output.chunk"]
     assert events[0].payload == {"text": "still running"}
+
+
+def test_tmux_adapter_watch_turn_emits_required_outbox_without_marker(tmp_path: Path):
+    outbox_path = tmp_path / "workers" / "worker-1" / "outbox" / "turn-1.json"
+    outbox_path.parent.mkdir(parents=True)
+    outbox_path.write_text(
+        json.dumps(
+            {
+                "crew_id": "crew-1",
+                "worker_id": "worker-1",
+                "turn_id": "turn-1",
+                "status": "completed",
+                "summary": "implemented",
+            }
+        ),
+        encoding="utf-8",
+    )
+    native = FakeNativeSession()
+    native.observe_result = {
+        "snapshot": "",
+        "marker": "marker-1",
+        "marker_seen": False,
+        "transcript_artifact": "",
+    }
+    adapter = ClaudeCodeTmuxAdapter(native_session=native)
+    turn = TurnEnvelope(
+        crew_id="crew-1",
+        worker_id="worker-1",
+        turn_id="turn-1",
+        round_id="round-1",
+        phase="source",
+        message="Implement",
+        expected_marker="marker-1",
+        required_outbox_path=str(outbox_path),
+    )
+
+    events = list(adapter.watch_turn(turn))
+
+    assert [event.type for event in events] == ["worker.outbox.detected"]
+    assert events[0].payload["valid"] is True
+    assert events[0].artifact_refs == ["workers/worker-1/outbox/turn-1.json"]
 
 
 def test_tmux_adapter_watch_turn_ignores_malformed_observation_values():
