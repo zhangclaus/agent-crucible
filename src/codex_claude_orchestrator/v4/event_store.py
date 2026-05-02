@@ -43,6 +43,8 @@ class SQLiteEventStore:
         crew_id: str = "",
         worker_id: str = "",
         turn_id: str = "",
+        round_id: str = "",
+        contract_id: str = "",
         idempotency_key: str = "",
         payload: dict[str, Any] | None = None,
         artifact_refs: list[str] | None = None,
@@ -63,6 +65,8 @@ class SQLiteEventStore:
                 crew_id=crew_id,
                 worker_id=worker_id,
                 turn_id=turn_id,
+                round_id=round_id,
+                contract_id=contract_id,
                 idempotency_key=idempotency_key,
                 payload=payload or {},
                 artifact_refs=artifact_refs or [],
@@ -86,6 +90,8 @@ class SQLiteEventStore:
         crew_id: str = "",
         worker_id: str = "",
         turn_id: str = "",
+        round_id: str = "",
+        contract_id: str = "",
         idempotency_key: str,
         payload: dict[str, Any] | None = None,
         artifact_refs: list[str] | None = None,
@@ -105,6 +111,8 @@ class SQLiteEventStore:
                 crew_id=crew_id,
                 worker_id=worker_id,
                 turn_id=turn_id,
+                round_id=round_id,
+                contract_id=contract_id,
                 idempotency_key=idempotency_key,
                 payload=payload or {},
                 artifact_refs=artifact_refs or [],
@@ -180,6 +188,8 @@ class SQLiteEventStore:
                     crew_id TEXT NOT NULL DEFAULT '',
                     worker_id TEXT NOT NULL DEFAULT '',
                     turn_id TEXT NOT NULL DEFAULT '',
+                    round_id TEXT NOT NULL DEFAULT '',
+                    contract_id TEXT NOT NULL DEFAULT '',
                     idempotency_key TEXT NOT NULL DEFAULT '',
                     payload_json TEXT NOT NULL,
                     artifact_refs_json TEXT NOT NULL,
@@ -188,6 +198,14 @@ class SQLiteEventStore:
                 )
                 """
             )
+            existing_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(events)").fetchall()
+            }
+            if "round_id" not in existing_columns:
+                conn.execute("ALTER TABLE events ADD COLUMN round_id TEXT NOT NULL DEFAULT ''")
+            if "contract_id" not in existing_columns:
+                conn.execute("ALTER TABLE events ADD COLUMN contract_id TEXT NOT NULL DEFAULT ''")
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idempotency_key_non_empty
@@ -199,6 +217,18 @@ class SQLiteEventStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_events_turn_id
                 ON events (turn_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_events_round_id
+                ON events (round_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_events_contract_id
+                ON events (contract_id)
                 """
             )
 
@@ -253,11 +283,13 @@ class SQLiteEventStore:
                 crew_id,
                 worker_id,
                 turn_id,
+                round_id,
+                contract_id,
                 idempotency_key,
                 payload_json,
                 artifact_refs_json,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.event_id,
@@ -267,6 +299,8 @@ class SQLiteEventStore:
                 event.crew_id,
                 event.worker_id,
                 event.turn_id,
+                event.round_id,
+                event.contract_id,
                 event.idempotency_key,
                 json.dumps(normalize(event.payload), sort_keys=True),
                 json.dumps(normalize(event.artifact_refs), sort_keys=True),
@@ -305,6 +339,8 @@ class SQLiteEventStore:
             crew_id=row["crew_id"],
             worker_id=row["worker_id"],
             turn_id=row["turn_id"],
+            round_id=row["round_id"],
+            contract_id=row["contract_id"],
             idempotency_key=row["idempotency_key"],
             payload=json.loads(row["payload_json"]),
             artifact_refs=json.loads(row["artifact_refs_json"]),

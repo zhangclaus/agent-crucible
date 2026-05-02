@@ -32,6 +32,8 @@ class AgentEvent:
     crew_id: str = ""
     worker_id: str = ""
     turn_id: str = ""
+    round_id: str = ""
+    contract_id: str = ""
     idempotency_key: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
     artifact_refs: list[str] = field(default_factory=list)

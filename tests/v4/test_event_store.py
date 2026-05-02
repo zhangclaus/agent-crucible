@@ -30,6 +30,8 @@ def test_agent_event_to_dict_normalizes_nested_values() -> None:
         crew_id="crew-1",
         worker_id="worker-1",
         turn_id="turn-1",
+        round_id="round-1",
+        contract_id="contract-1",
         idempotency_key="worker-1:start",
         payload={
             "nested": NestedPayload(Path("logs/worker-1.jsonl"), EventType.WORKER_STARTED),
@@ -47,6 +49,8 @@ def test_agent_event_to_dict_normalizes_nested_values() -> None:
         "crew_id": "crew-1",
         "worker_id": "worker-1",
         "turn_id": "turn-1",
+        "round_id": "round-1",
+        "contract_id": "contract-1",
         "idempotency_key": "worker-1:start",
         "payload": {
             "nested": {"path": "logs/worker-1.jsonl", "kind": "worker.started"},
@@ -73,6 +77,8 @@ def test_agent_event_to_dict_includes_stable_default_values() -> None:
         "crew_id": "",
         "worker_id": "",
         "turn_id": "",
+        "round_id": "",
+        "contract_id": "",
         "idempotency_key": "",
         "payload": {},
         "artifact_refs": [],
@@ -120,6 +126,27 @@ def test_sqlite_event_store_idempotency_key_dedupes_to_original_event(tmp_path: 
     assert duplicate.event_id == first.event_id
     assert duplicate.payload == {"original": True}
     assert [event.event_id for event in store.list_stream("crew-1")] == [first.event_id]
+
+
+def test_sqlite_event_store_round_and_contract_fields(tmp_path: Path) -> None:
+    store = SQLiteEventStore(tmp_path / "events.db")
+
+    event = store.append(
+        stream_id="crew-1",
+        type="turn.requested",
+        crew_id="crew-1",
+        worker_id="worker-1",
+        turn_id="turn-1",
+        round_id="round-1",
+        contract_id="contract-1",
+        idempotency_key="crew-1/turn-1/requested",
+    )
+
+    loaded = store.list_by_turn("turn-1")[0]
+    assert event.round_id == "round-1"
+    assert event.contract_id == "contract-1"
+    assert loaded.round_id == "round-1"
+    assert loaded.contract_id == "contract-1"
 
 
 def test_sqlite_event_store_append_claim_reports_whether_event_was_inserted(
