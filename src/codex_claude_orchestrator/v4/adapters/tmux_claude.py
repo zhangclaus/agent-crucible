@@ -65,11 +65,21 @@ class ClaudeCodeTmuxAdapter:
     def watch_turn(self, turn: TurnEnvelope):
         worker = self._workers.get(turn.worker_id)
         terminal_pane = _terminal_pane_for(turn, worker)
-        observation = self._native_session.observe(
-            terminal_pane=terminal_pane,
-            lines=200,
-            turn_marker=turn.expected_marker,
-        )
+        yield from self._watch_required_outbox(turn)
+        try:
+            observation = self._native_session.observe(
+                terminal_pane=terminal_pane,
+                lines=200,
+                turn_marker=turn.expected_marker,
+            )
+        except Exception as exc:
+            yield RuntimeEvent(
+                type="runtime.observe_failed",
+                turn_id=turn.turn_id,
+                worker_id=turn.worker_id,
+                payload={"source": "tmux", "error": str(exc)},
+            )
+            return
         text = _non_empty_str(observation.get("snapshot"))
         transcript_artifact = _non_empty_str(observation.get("transcript_artifact"))
         artifact_refs = [transcript_artifact] if transcript_artifact else []
@@ -93,6 +103,8 @@ class ClaudeCodeTmuxAdapter:
                 },
                 artifact_refs=artifact_refs,
             )
+
+    def _watch_required_outbox(self, turn: TurnEnvelope):
         required_outbox_path = _non_empty_str(turn.required_outbox_path)
         if required_outbox_path:
             yield from self._outbox_watcher.watch(

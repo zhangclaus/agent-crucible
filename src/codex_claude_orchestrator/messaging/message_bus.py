@@ -68,6 +68,34 @@ class AgentMessageBus:
             self._write_cursors(crew_id, cursors)
         return unread
 
+    def advance_cursor_for_read_message_ids(
+        self,
+        *,
+        crew_id: str,
+        recipient: str,
+        message_ids: list[str],
+    ) -> list[str]:
+        messages = [
+            message
+            for message in self.list_messages(crew_id)
+            if self._is_delivered_to(message, recipient)
+        ]
+        read_ids = set(message_ids)
+        cursor = self.cursor_summary(crew_id).get(recipient, 0)
+        next_cursor = cursor
+        advanced: list[str] = []
+        while next_cursor < len(messages):
+            message_id = messages[next_cursor].get("message_id")
+            if not isinstance(message_id, str) or message_id not in read_ids:
+                break
+            advanced.append(message_id)
+            next_cursor += 1
+        if next_cursor != cursor:
+            cursors = self.cursor_summary(crew_id)
+            cursors[recipient] = next_cursor
+            self._write_cursors(crew_id, cursors)
+        return advanced
+
     def cursor_summary(self, crew_id: str) -> dict[str, int]:
         path = self._recorder._crew_dir(crew_id) / "message_cursors.json"
         if not path.exists():

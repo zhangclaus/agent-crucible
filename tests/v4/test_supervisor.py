@@ -3,12 +3,17 @@ from pathlib import Path
 
 import pytest
 
+from codex_claude_orchestrator.crew.models import AgentMessageType, CrewRecord
+from codex_claude_orchestrator.messaging.message_bus import AgentMessageBus
+from codex_claude_orchestrator.state.crew_recorder import CrewRecorder
 from codex_claude_orchestrator.v4.adapters.tmux_claude import ClaudeCodeTmuxAdapter
 from codex_claude_orchestrator.v4.artifacts import ArtifactStore
 from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
+from codex_claude_orchestrator.v4.message_ack import MessageAckProcessor
 from codex_claude_orchestrator.v4.paths import V4Paths
 from codex_claude_orchestrator.v4.runtime import DeliveryResult, RuntimeEvent, TurnEnvelope
 from codex_claude_orchestrator.v4.supervisor import V4Supervisor
+from codex_claude_orchestrator.v4.turn_context import TurnContextBuilder
 
 
 class FakeAdapter:
@@ -272,6 +277,60 @@ def test_v4_supervisor_delivers_turn_context_to_worker(tmp_path: Path):
     assert delivered_turn.unread_message_ids == ["msg-1"]
     assert delivered_turn.open_protocol_requests == [{"request_id": "req-1", "subject": "Review"}]
     assert delivered_turn.open_protocol_requests_digest == "open: Review"
+
+
+def test_v4_supervisor_processes_valid_outbox_message_ack(tmp_path: Path):
+    recorder = CrewRecorder(tmp_path / ".orchestrator")
+    recorder.start_crew(CrewRecord(crew_id="crew-1", repo=str(tmp_path), root_goal="goal"))
+    bus = AgentMessageBus(
+        recorder,
+        message_id_factory=iter(["msg-1"]).__next__,
+        thread_id_factory=iter(["thread-1"]).__next__,
+    )
+    bus.send(
+        crew_id="crew-1",
+        sender="codex",
+        recipient="worker-1",
+        message_type=AgentMessageType.QUESTION,
+        body="review this",
+    )
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+
+    def events_for_turn(turn: TurnEnvelope):
+        return [
+            RuntimeEvent(
+                type="worker.outbox.detected",
+                turn_id=turn.turn_id,
+                worker_id=turn.worker_id,
+                payload={
+                    "valid": True,
+                    "status": "completed",
+                    "acknowledged_message_ids": ["msg-1"],
+                },
+            )
+        ]
+
+    supervisor = V4Supervisor(
+        event_store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        adapter=FakeAdapter(events_for_turn),
+        turn_context_builder=TurnContextBuilder(bus),
+        message_ack_processor=MessageAckProcessor(event_store=store, message_bus=bus),
+    )
+
+    result = supervisor.run_source_turn(
+        crew_id="crew-1",
+        goal="Fix tests",
+        worker_id="worker-1",
+        round_id="round-1",
+        message="Implement",
+        expected_marker="marker-1",
+    )
+
+    assert result["status"] == "turn_completed"
+    assert bus.cursor_summary("crew-1") == {"worker-1": 1}
+    assert bus.read_inbox(crew_id="crew-1", recipient="worker-1") == []
+    assert "message.read" in [event.type for event in store.list_stream("crew-1")]
 
 
 def test_v4_supervisor_assigns_canonical_required_outbox_path(tmp_path: Path):

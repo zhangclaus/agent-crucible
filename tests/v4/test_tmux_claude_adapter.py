@@ -11,6 +11,7 @@ class FakeNativeSession:
         self.observations = []
         self.send_result = None
         self.observe_result = None
+        self.observe_exception = None
 
     def send(self, **kwargs):
         self.sent.append(kwargs)
@@ -21,6 +22,8 @@ class FakeNativeSession:
 
     def observe(self, **kwargs):
         self.observations.append(kwargs)
+        if self.observe_exception is not None:
+            raise self.observe_exception
         return self.observe_result or {
             "snapshot": "hello\nmarker-1",
             "marker": "marker-1",
@@ -281,6 +284,48 @@ def test_tmux_adapter_watch_turn_emits_required_outbox_without_marker(tmp_path: 
     assert [event.type for event in events] == ["worker.outbox.detected"]
     assert events[0].payload["valid"] is True
     assert events[0].artifact_refs == ["workers/worker-1/outbox/turn-1.json"]
+
+
+def test_tmux_adapter_watch_turn_reads_outbox_when_observe_fails(tmp_path: Path):
+    outbox_path = tmp_path / "workers" / "worker-1" / "outbox" / "turn-1.json"
+    outbox_path.parent.mkdir(parents=True)
+    outbox_path.write_text(
+        json.dumps(
+            {
+                "crew_id": "crew-1",
+                "worker_id": "worker-1",
+                "turn_id": "turn-1",
+                "status": "completed",
+                "summary": "implemented",
+            }
+        ),
+        encoding="utf-8",
+    )
+    native = FakeNativeSession()
+    native.observe_exception = RuntimeError("capture-pane failed")
+    adapter = ClaudeCodeTmuxAdapter(native_session=native)
+    turn = TurnEnvelope(
+        crew_id="crew-1",
+        worker_id="worker-1",
+        turn_id="turn-1",
+        round_id="round-1",
+        phase="source",
+        message="Implement",
+        expected_marker="marker-1",
+        required_outbox_path=str(outbox_path),
+    )
+
+    events = list(adapter.watch_turn(turn))
+
+    assert [event.type for event in events] == [
+        "worker.outbox.detected",
+        "runtime.observe_failed",
+    ]
+    assert events[0].payload["valid"] is True
+    assert events[1].payload == {
+        "source": "tmux",
+        "error": "capture-pane failed",
+    }
 
 
 def test_tmux_adapter_watch_turn_ignores_malformed_observation_values():

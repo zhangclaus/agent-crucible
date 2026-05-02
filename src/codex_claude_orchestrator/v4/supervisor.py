@@ -26,6 +26,7 @@ class V4Supervisor:
         adapter: RuntimeAdapter,
         turn_context_builder=None,
         adversarial_evaluator=None,
+        message_ack_processor=None,
         repo_root: str | Path | None = None,
     ) -> None:
         self._events = event_store
@@ -33,6 +34,7 @@ class V4Supervisor:
         self._adapter = adapter
         self._turn_context_builder = turn_context_builder
         self._adversarial_evaluator = adversarial_evaluator
+        self._message_ack_processor = message_ack_processor
         self._repo_root = Path(repo_root).resolve() if repo_root is not None else None
         self._turns = TurnService(event_store=event_store, adapter=adapter)
         self._workflow = V4WorkflowEngine(event_store=event_store)
@@ -100,7 +102,7 @@ class V4Supervisor:
             if self._is_current_turn_event(turn, runtime_event)
         ]
         for index, runtime_event in enumerate(runtime_events):
-            self._events.append(
+            event = self._events.append(
                 stream_id=crew_id,
                 type=runtime_event.type,
                 crew_id=crew_id,
@@ -115,6 +117,7 @@ class V4Supervisor:
                 payload=runtime_event.payload,
                 artifact_refs=runtime_event.artifact_refs,
             )
+            self._process_message_ack_if_configured(event)
 
         terminal_result = self._terminal_result(crew_id=crew_id, turn=turn)
         if terminal_result is not None:
@@ -215,6 +218,10 @@ class V4Supervisor:
     def _evaluate_completed_turn_if_configured(self, event: AgentEvent) -> None:
         if event.type == "turn.completed" and self._adversarial_evaluator is not None:
             self._adversarial_evaluator.evaluate_completed_turn(event)
+
+    def _process_message_ack_if_configured(self, event: AgentEvent) -> None:
+        if self._message_ack_processor is not None:
+            self._message_ack_processor.process(event)
 
 
 def _runtime_event_digest(event: RuntimeEvent, *, index: int) -> str:
