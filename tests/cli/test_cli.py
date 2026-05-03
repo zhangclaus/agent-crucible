@@ -954,7 +954,7 @@ class FakeCrewController:
             {
                 "crew_id": "crew-cli",
                 "status": "running",
-                "to_dict": lambda self: {"crew_id": "crew-cli", "status": "running", "active_worker_ids": []},
+                "to_dict": lambda self: {"crew_id": "crew-cli", "status": "running"},
             },
         )()
 
@@ -1112,7 +1112,6 @@ def test_main_crew_start_defaults_to_dynamic_control_plane(tmp_path: Path, monke
     payload = json.loads(stdout.getvalue())
     assert exit_code == 0
     assert payload["spawn_policy"] == "dynamic"
-    assert payload["active_worker_ids"] == []
     assert fake_controller.calls[0]["method"] == "start_dynamic"
 
 
@@ -1580,6 +1579,71 @@ def test_cli_crew_events_uses_v4_event_store_factory(tmp_path, monkeypatch):
     assert "crew.started" in stdout.getvalue()
     assert calls[0] == {"repo_root": tmp_path.resolve(), "readonly": True}
     assert calls[1] == {"stream_id": "crew-1", "after_sequence": 0}
+
+
+def test_cli_crew_event_store_health_prints_factory_health(tmp_path, monkeypatch):
+    from codex_claude_orchestrator.cli import main
+
+    class FakeStore:
+        def health(self):
+            return {
+                "backend": "fake",
+                "ok": True,
+                "expected_schema_version": 2,
+                "latest_schema_version": 2,
+            }
+
+    monkeypatch.setattr("codex_claude_orchestrator.cli.build_v4_event_store", lambda repo_root, *, readonly=False: FakeStore())
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        result = main(["crew", "event-store-health", "--repo", str(tmp_path)])
+
+    payload = json.loads(stdout.getvalue())
+    assert result == 0
+    assert payload["backend"] == "fake"
+    assert payload["ok"] is True
+
+
+def test_cli_crew_status_uses_v4_projection_when_events_exist(tmp_path, monkeypatch):
+    from codex_claude_orchestrator.cli import main
+    from codex_claude_orchestrator.v4.events import AgentEvent
+
+    class FakeStore:
+        def list_stream(self, stream_id: str, after_sequence: int = 0):
+            return [
+                AgentEvent(
+                    event_id="evt-1",
+                    stream_id=stream_id,
+                    sequence=1,
+                    type="crew.started",
+                    crew_id=stream_id,
+                    payload={"goal": "Fix tests"},
+                ),
+                AgentEvent(
+                    event_id="evt-2",
+                    stream_id=stream_id,
+                    sequence=2,
+                    type="crew.ready_for_accept",
+                    crew_id=stream_id,
+                ),
+            ]
+
+    fake_controller = FakeCrewController()
+    monkeypatch.setattr("codex_claude_orchestrator.cli.build_v4_event_store", lambda repo_root, *, readonly=False: FakeStore())
+    monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_controller", lambda repo_root: fake_controller)
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        result = main(["crew", "status", "--repo", str(tmp_path), "--crew", "crew-1"])
+
+    payload = json.loads(stdout.getvalue())
+    assert result == 0
+    assert payload["runtime"] == "v4"
+    assert payload["crew"]["crew_id"] == "crew-1"
+    assert payload["crew"]["status"] == "ready"
+    assert payload["crew"]["root_goal"] == "Fix tests"
+    assert fake_controller.calls == []
 
 
 def test_cli_crew_events_without_v4_db_is_read_only(tmp_path, monkeypatch):

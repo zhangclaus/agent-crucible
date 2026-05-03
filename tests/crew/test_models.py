@@ -31,7 +31,6 @@ def test_crew_record_serializes_enums_paths_and_worker_ids():
         root_goal="Build V3 MVP",
         repo=Path("/repo"),
         status=CrewStatus.RUNNING,
-        active_worker_ids=["worker-explorer"],
     )
 
     data = crew.to_dict()
@@ -39,7 +38,6 @@ def test_crew_record_serializes_enums_paths_and_worker_ids():
     assert data["crew_id"] == "crew-1"
     assert data["repo"] == "/repo"
     assert data["status"] == "running"
-    assert data["active_worker_ids"] == ["worker-explorer"]
 
 
 def test_worker_task_blackboard_serialization_matches_mvp_schema():

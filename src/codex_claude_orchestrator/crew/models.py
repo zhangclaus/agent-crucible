@@ -158,7 +158,6 @@ class CrewRecord:
     status: CrewStatus = CrewStatus.PLANNING
     planner_summary: str = ""
     max_workers: int = 3
-    active_worker_ids: list[str] = field(default_factory=list)
     task_graph_path: str | Path = ""
     blackboard_path: str | Path = ""
     verification_summary: str = ""

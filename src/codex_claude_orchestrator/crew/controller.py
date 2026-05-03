@@ -111,7 +111,6 @@ class CrewController:
             repo=repo_root,
             task_graph_path="tasks.json",
             blackboard_path="blackboard.jsonl",
-            active_worker_ids=[],
         )
         self._recorder.start_crew(crew)
         self._blackboard.append(
@@ -538,7 +537,6 @@ class CrewController:
             status=CrewStatus(payload.get("status", CrewStatus.PLANNING.value)),
             planner_summary=payload.get("planner_summary", ""),
             max_workers=payload.get("max_workers", 3),
-            active_worker_ids=payload.get("active_worker_ids", []),
             task_graph_path=payload.get("task_graph_path", ""),
             blackboard_path=payload.get("blackboard_path", ""),
             verification_summary=payload.get("verification_summary", ""),

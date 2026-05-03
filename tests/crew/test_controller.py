@@ -303,7 +303,6 @@ def test_controller_starts_dynamic_crew_and_ensures_contract_worker_with_snapsho
     snapshot = controller.write_team_snapshot(crew_id=crew.crew_id, last_decision={"action_type": "spawn_worker"})
     details = recorder.read_crew(crew.crew_id)
 
-    assert crew.active_worker_ids == []
     assert worker["worker_id"] == "worker-targeted-code-editor"
     assert details["tasks"][0]["contract_id"] == "contract-source"
     assert snapshot["contracts_created"][0]["contract_id"] == "contract-source"
