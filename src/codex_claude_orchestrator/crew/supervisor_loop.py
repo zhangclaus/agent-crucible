@@ -35,12 +35,21 @@ class CrewSupervisorLoop:
         self._review_parser = review_parser or ReviewVerdictParser()
         self._marker_policy = marker_policy or MarkerObservationPolicy()
 
-    def run(self, crew_id, max_rounds, verification_commands, sampling_fn) -> dict:
+    async def run(
+        self,
+        *,
+        crew_id: str,
+        max_rounds: int,
+        verification_commands: list[str],
+        sampling_fn,
+    ) -> dict:
         for round_index in range(1, max_rounds + 1):
-            self._wait_for_workers(crew_id)
+            completed = self._wait_for_workers(crew_id)
+            if not completed:
+                return {"crew_id": crew_id, "status": "timeout", "rounds": round_index}
             verify_result = self._auto_verify(crew_id, verification_commands)
             if verify_result.get("passed"):
-                decision = self._ask_supervisor(sampling_fn, crew_id, "verification_passed", verify_result)
+                decision = await self._ask_supervisor(sampling_fn, crew_id, "verification_passed", verify_result)
                 if decision.get("action") == "accept":
                     return self._do_accept(crew_id)
                 # Execute non-accept decisions (spawn, challenge)
@@ -48,7 +57,7 @@ class CrewSupervisorLoop:
                 continue
             failure_count = verify_result.get("failure_count", 0)
             if failure_count >= 3:
-                decision = self._ask_supervisor(sampling_fn, crew_id, "verification_failed", verify_result)
+                decision = await self._ask_supervisor(sampling_fn, crew_id, "verification_failed", verify_result)
                 self._execute_decision(crew_id, decision)
                 continue
             self._auto_challenge(crew_id, verify_result)
@@ -647,17 +656,19 @@ class CrewSupervisorLoop:
 
         return {"crew_id": crew_id, "status": "max_rounds_exhausted", "rounds": max_rounds, "events": events}
 
-    def _wait_for_workers(self, crew_id):
-        while True:
+    def _wait_for_workers(self, crew_id: str, max_wait_attempts: int | None = None) -> bool:
+        """阻塞轮询，直到所有 Worker 完成。返回 True 如果完成，False 如果超时。"""
+        attempts = max_wait_attempts or self._max_observe_attempts
+        for _ in range(attempts):
             details = self._controller.status(crew_id=crew_id)
             workers = details.get("workers", [])
             all_done = all(w.get("status") in ("idle", "stopped", "failed") for w in workers)
             if all_done:
-                return
+                return True
             time.sleep(self._poll_interval_seconds)
+        return False
 
-    def _ask_supervisor(self, sampling_fn, crew_id, situation, context):
-        import asyncio
+    async def _ask_supervisor(self, sampling_fn, crew_id: str, situation: str, context: dict) -> dict:
         import json
 
         import mcp.types as types
@@ -665,16 +676,14 @@ class CrewSupervisorLoop:
         from codex_claude_orchestrator.mcp_server.context.compressor import compress_crew_status
         compressed = compress_crew_status(self._controller.status(crew_id=crew_id))
         prompt = self._build_decision_prompt(situation, context, compressed)
-        result = asyncio.get_event_loop().run_until_complete(
-            sampling_fn(
-                messages=[types.SamplingMessage(role="user", content=types.TextContent(type="text", text=prompt))],
-                system_prompt="你是 Crew supervisor，负责战略决策。根据提供的 context 选择下一步行动。回复格式：accept / spawn_worker(label, mission) / challenge(worker_id, goal)",
-                max_tokens=500,
-            )
+        result = await sampling_fn(
+            messages=[types.SamplingMessage(role="user", content=types.TextContent(type="text", text=prompt))],
+            system_prompt="你是 Crew supervisor，负责战略决策。根据提供的 context 选择下一步行动。回复格式：accept / spawn_worker(label, mission) / challenge(worker_id, goal)",
+            max_tokens=500,
         )
         return self._parse_decision(result.content.text)
 
-    def _build_decision_prompt(self, situation, context, status):
+    def _build_decision_prompt(self, situation: str, context: dict, status: dict) -> str:
         import json
         status_text = json.dumps(status, ensure_ascii=False, indent=2)
         if situation == "verification_passed":
@@ -683,7 +692,7 @@ class CrewSupervisorLoop:
             return f"验证失败 3 次，需要战略决策。\n\n失败详情：{json.dumps(context, ensure_ascii=False)}\n\n当前状态：\n{status_text}\n\n请选择：accept / spawn_worker(label, mission) / challenge(worker_id, goal)"
         return f"当前情况：{situation}\n\n上下文：{json.dumps(context, ensure_ascii=False)}\n\n状态：\n{status_text}"
 
-    def _parse_decision(self, response):
+    def _parse_decision(self, response: str) -> dict:
         import re
         text = response.strip()
         if text.startswith("accept"):
@@ -698,7 +707,7 @@ class CrewSupervisorLoop:
             return {"action": "challenge", **params}
         return {"action": "observe"}
 
-    def _execute_decision(self, crew_id, decision):
+    def _execute_decision(self, crew_id: str, decision: dict) -> None:
         from codex_claude_orchestrator.crew.models import AuthorityLevel, WorkerContract, WorkspacePolicy
         if decision["action"] == "spawn_worker":
             contract = WorkerContract(
@@ -715,7 +724,7 @@ class CrewSupervisorLoop:
         elif decision["action"] == "challenge":
             self._controller.challenge(crew_id=crew_id, worker_id=decision.get("worker_id", ""), goal=decision.get("goal", ""))
 
-    def _do_accept(self, crew_id):
+    def _do_accept(self, crew_id: str) -> dict:
         return self._controller.accept(crew_id=crew_id)
 
     def _auto_verify(self, crew_id: str, commands: list[str]) -> dict:

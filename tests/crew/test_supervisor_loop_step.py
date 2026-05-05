@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import MagicMock, patch
 
 from codex_claude_orchestrator.crew.supervisor_loop import CrewSupervisorLoop
@@ -18,9 +19,12 @@ def test_run_accepts_when_verify_passes_and_supervisor_says_accept():
         result.content.text = "accept"
         return result
 
-    with patch.object(loop, "_wait_for_workers"), \
+    with patch.object(loop, "_wait_for_workers", return_value=True), \
          patch.object(loop, "_auto_verify", return_value={"passed": True, "failure_count": 0}):
-        result = loop.run(crew_id="c1", max_rounds=3, verification_commands=["pytest"], sampling_fn=mock_sampling)
+        result = asyncio.run(loop.run(
+            crew_id="c1", max_rounds=3,
+            verification_commands=["pytest"], sampling_fn=mock_sampling,
+        ))
     assert result["status"] == "accepted"
     controller.accept.assert_called_once_with(crew_id="c1")
 
@@ -50,10 +54,13 @@ def test_run_auto_challenges_when_verify_fails_less_than_3():
         verify_call["n"] += 1
         return verify_results[min(idx, len(verify_results) - 1)]
 
-    with patch.object(loop, "_wait_for_workers"), \
+    with patch.object(loop, "_wait_for_workers", return_value=True), \
          patch.object(loop, "_auto_verify", side_effect=auto_verify_side_effect), \
          patch.object(loop, "_auto_challenge"):
-        result = loop.run(crew_id="c1", max_rounds=3, verification_commands=["pytest"], sampling_fn=mock_sampling)
+        result = asyncio.run(loop.run(
+            crew_id="c1", max_rounds=3,
+            verification_commands=["pytest"], sampling_fn=mock_sampling,
+        ))
     assert result["status"] == "accepted"
 
 
@@ -73,9 +80,12 @@ def test_run_asks_supervisor_when_verify_fails_3_times():
         result.content.text = "accept"
         return result
 
-    with patch.object(loop, "_wait_for_workers"), \
+    with patch.object(loop, "_wait_for_workers", return_value=True), \
          patch.object(loop, "_auto_verify", return_value={"passed": False, "failure_count": 3, "summary": "fail 3x"}):
-        loop.run(crew_id="c1", max_rounds=1, verification_commands=["pytest"], sampling_fn=mock_sampling)
+        asyncio.run(loop.run(
+            crew_id="c1", max_rounds=1,
+            verification_commands=["pytest"], sampling_fn=mock_sampling,
+        ))
     assert len(sampling_calls) == 1
     assert "验证失败 3 次" in sampling_calls[0]["messages"][0].content.text
 
@@ -94,9 +104,12 @@ def test_run_spawns_worker_when_supervisor_says_spawn():
         result.content.text = 'spawn_worker(label="fixer", mission="fix the tests")'
         return result
 
-    with patch.object(loop, "_wait_for_workers"), \
+    with patch.object(loop, "_wait_for_workers", return_value=True), \
          patch.object(loop, "_auto_verify", return_value={"passed": False, "failure_count": 3, "summary": "fail"}):
-        loop.run(crew_id="c1", max_rounds=1, verification_commands=["pytest"], sampling_fn=mock_sampling)
+        asyncio.run(loop.run(
+            crew_id="c1", max_rounds=1,
+            verification_commands=["pytest"], sampling_fn=mock_sampling,
+        ))
     controller.ensure_worker.assert_called_once()
 
 
@@ -114,9 +127,12 @@ def test_run_returns_max_rounds_when_exhausted():
         result.content.text = "observe"
         return result
 
-    with patch.object(loop, "_wait_for_workers"), \
+    with patch.object(loop, "_wait_for_workers", return_value=True), \
          patch.object(loop, "_auto_verify", return_value={"passed": False, "failure_count": 0, "summary": "no verify"}):
-        result = loop.run(crew_id="c1", max_rounds=2, verification_commands=[], sampling_fn=mock_sampling)
+        result = asyncio.run(loop.run(
+            crew_id="c1", max_rounds=2,
+            verification_commands=[], sampling_fn=mock_sampling,
+        ))
     assert result["status"] == "max_rounds_reached"
     assert result["rounds"] == 2
 
@@ -162,8 +178,11 @@ def test_run_executes_spawn_decision_when_verify_passes():
         result.content.text = 'spawn_worker(label="fixer", mission="fix the tests")'
         return result
 
-    with patch.object(loop, "_wait_for_workers"), \
+    with patch.object(loop, "_wait_for_workers", return_value=True), \
          patch.object(loop, "_auto_verify", return_value={"passed": True, "failure_count": 0}):
-        result = loop.run(crew_id="c1", max_rounds=1, verification_commands=["pytest"], sampling_fn=mock_sampling)
+        asyncio.run(loop.run(
+            crew_id="c1", max_rounds=1,
+            verification_commands=["pytest"], sampling_fn=mock_sampling,
+        ))
 
     controller.ensure_worker.assert_called_once()
