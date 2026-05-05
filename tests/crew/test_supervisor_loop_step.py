@@ -163,6 +163,26 @@ def test_parse_decision_unknown_defaults_to_observe():
     assert loop._parse_decision("I'm not sure what to do") == {"action": "observe"}
 
 
+def test_crew_run_registered_as_tool():
+    """crew_run should be registered as an MCP tool."""
+    from unittest.mock import MagicMock
+    from codex_claude_orchestrator.mcp_server.tools.crew_execution import register_execution_tools
+
+    mock_server = MagicMock()
+    registered_tools = {}
+    def mock_tool(name):
+        def decorator(fn):
+            registered_tools[name] = fn
+            return fn
+        return decorator
+    mock_server.tool = mock_tool
+
+    register_execution_tools(mock_server, MagicMock(), supervision_loop=MagicMock())
+    assert "crew_run" in registered_tools
+    assert "crew_verify" not in registered_tools
+    assert "crew_merge_plan" not in registered_tools
+
+
 def test_run_executes_spawn_decision_when_verify_passes():
     """When verification passes but supervisor says spawn, execute the spawn decision."""
     controller = MagicMock()
