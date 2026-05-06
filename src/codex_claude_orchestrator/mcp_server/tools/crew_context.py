@@ -10,10 +10,25 @@ from codex_claude_orchestrator.mcp_server.context.compressor import (
     compress_blackboard,
     filter_events,
 )
+from codex_claude_orchestrator.mcp_server.context.summarizer_trigger import (
+    should_trigger_summarizer,
+)
 from codex_claude_orchestrator.mcp_server.context.token_budget import truncate_json
 
 
 def register_context_tools(server: Server, controller) -> None:
+
+    def _spawn_summarizer_if_needed(crew_id: str, entries: list[dict], repo: str) -> None:
+        """Spawn summarizer worker synchronously if needed."""
+        from codex_claude_orchestrator.mcp_server.tools.crew_lifecycle import WORKER_TEMPLATES
+        if not repo or not should_trigger_summarizer(entries):
+            return
+        contract = WORKER_TEMPLATES["summarizer"]
+        controller.ensure_worker(
+            repo_root=Path(repo),
+            crew_id=crew_id,
+            contract=contract,
+        )
 
     @server.tool("crew_blackboard")
     async def crew_blackboard(
@@ -21,9 +36,11 @@ def register_context_tools(server: Server, controller) -> None:
         worker_id: str | None = None,
         entry_type: str | None = None,
         limit: int = 10,
+        repo: str = "",
     ) -> list[TextContent]:
         """读取黑板条目（过滤后，默认最近 10 条）。"""
         entries = controller.blackboard_entries(crew_id=crew_id)
+        _spawn_summarizer_if_needed(crew_id, entries, repo)
         filtered = compress_blackboard(entries, limit=limit, worker_id=worker_id, entry_type=entry_type)
         return [TextContent(type="text", text=truncate_json(filtered))]
 

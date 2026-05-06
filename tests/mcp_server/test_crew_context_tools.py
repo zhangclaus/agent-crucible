@@ -163,3 +163,84 @@ def test_crew_diff_returns_all_when_no_file():
     result = asyncio.run(server.tools["crew_diff"](crew_id="c1"))
     data = json.loads(result[0].text)
     assert len(data) == 2
+
+
+def test_crew_blackboard_triggers_summarizer_when_over_threshold():
+    """When blackboard has >20 entries and no fresh summary, spawn summarizer async."""
+    from pathlib import Path
+    server = FakeServer()
+    controller = MagicMock()
+    entries = [
+        {"entry_id": f"e{i}", "type": "fact", "content": f"entry {i}",
+         "timestamp": f"2026-05-06T{i:02d}:00:00"}
+        for i in range(25)
+    ]
+    controller.blackboard_entries.return_value = entries
+    controller.ensure_worker.return_value = {"worker_id": "ws1", "status": "running"}
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_blackboard"](crew_id="c1", repo="/repo"))
+    data = json.loads(result[0].text)
+    assert len(data) > 0
+    controller.ensure_worker.assert_called_once()
+    call_kwargs = controller.ensure_worker.call_args[1]
+    assert call_kwargs["contract"].label == "summarizer"
+    assert call_kwargs["repo_root"] == Path("/repo")
+
+
+def test_crew_blackboard_no_trigger_when_under_threshold():
+    """When blackboard has <=20 entries, no summarizer spawned."""
+    server = FakeServer()
+    controller = MagicMock()
+    entries = [
+        {"entry_id": f"e{i}", "type": "fact", "content": f"entry {i}",
+         "timestamp": f"2026-05-06T{i:02d}:00:00"}
+        for i in range(10)
+    ]
+    controller.blackboard_entries.return_value = entries
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_blackboard"](crew_id="c1", repo="/repo"))
+    data = json.loads(result[0].text)
+    assert len(data) > 0
+    controller.ensure_worker.assert_not_called()
+
+
+def test_crew_blackboard_no_trigger_when_fresh_summary():
+    """When a fresh summary exists, no summarizer spawned even if over threshold."""
+    server = FakeServer()
+    controller = MagicMock()
+    entries = [
+        {"entry_id": f"e{i}", "type": "fact", "content": f"entry {i}",
+         "timestamp": f"2026-05-06T{i:02d}:00:00"}
+        for i in range(22)
+    ]
+    entries.append({
+        "entry_id": "s1", "type": "summary", "content": "the summary",
+        "timestamp": "2026-05-06T50:00:00",
+    })
+    controller.blackboard_entries.return_value = entries
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_blackboard"](crew_id="c1", repo="/repo"))
+    data = json.loads(result[0].text)
+    assert len(data) > 0
+    controller.ensure_worker.assert_not_called()
+
+
+def test_crew_blackboard_no_trigger_without_repo():
+    """When repo is not provided, trigger is skipped even if over threshold."""
+    server = FakeServer()
+    controller = MagicMock()
+    entries = [
+        {"entry_id": f"e{i}", "type": "fact", "content": f"entry {i}",
+         "timestamp": f"2026-05-06T{i:02d}:00:00"}
+        for i in range(25)
+    ]
+    controller.blackboard_entries.return_value = entries
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_blackboard"](crew_id="c1"))
+    data = json.loads(result[0].text)
+    assert len(data) > 0
+    controller.ensure_worker.assert_not_called()
