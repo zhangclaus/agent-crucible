@@ -726,3 +726,72 @@ def test_stop_crew_default_keep_does_not_clean(tmp_path: Path):
 
     assert result["stopped_workers"][0]["workspace_cleanup"] == {"removed": False, "reason": "keep policy"}
     assert len(fake_worktree.cleaned) == 0
+
+
+def _make_pool_with_worker_missing_key(tmp_path: Path, missing_key: str):
+    """Helper: create a pool where the stored worker dict is missing *missing_key*."""
+    import json
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    recorder = CrewRecorder(repo_root / ".orchestrator")
+    crew = CrewRecord(crew_id="crew-1", root_goal="Goal", repo=repo_root)
+    recorder.start_crew(crew)
+    recorder.append_worker(
+        crew.crew_id,
+        WorkerRecord(
+            worker_id="worker-bad",
+            crew_id=crew.crew_id,
+            role=WorkerRole.EXPLORER,
+            agent_profile="claude",
+            native_session_id="native-1",
+            terminal_session="session-1",
+            terminal_pane="session-1:claude.0",
+            transcript_artifact="workers/worker-bad/transcript.txt",
+            turn_marker="marker",
+            workspace_mode=WorkspaceMode.READONLY,
+            workspace_path=str(repo_root),
+            status=WorkerStatus.RUNNING,
+        ),
+    )
+    # Remove the key from the persisted JSONL to simulate an incomplete record.
+    path = repo_root / ".orchestrator" / "crews" / crew.crew_id / "workers.jsonl"
+    workers = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    for w in workers:
+        w.pop(missing_key, None)
+    path.write_text("".join(json.dumps(w) + "\n" for w in workers))
+    pool = WorkerPool(
+        recorder=recorder,
+        blackboard=BlackboardStore(recorder),
+        worktree_manager=FakeWorktreeManager(),
+        native_session=FakeNativeSession(),
+    )
+    return pool, crew
+
+
+def test_observe_worker_raises_on_missing_terminal_pane(tmp_path: Path):
+    """observe_worker should raise FileNotFoundError when terminal_pane is missing."""
+    import pytest
+
+    pool, crew = _make_pool_with_worker_missing_key(tmp_path, "terminal_pane")
+
+    with pytest.raises(FileNotFoundError, match="has no terminal pane"):
+        pool.observe_worker(
+            repo_root=tmp_path / "repo",
+            crew_id=crew.crew_id,
+            worker_id="worker-bad",
+        )
+
+
+def test_stop_worker_raises_on_missing_terminal_session(tmp_path: Path):
+    """stop_worker should raise FileNotFoundError when terminal_session is missing."""
+    import pytest
+
+    pool, crew = _make_pool_with_worker_missing_key(tmp_path, "terminal_session")
+
+    with pytest.raises(FileNotFoundError, match="has no terminal session"):
+        pool.stop_worker(
+            repo_root=tmp_path / "repo",
+            crew_id=crew.crew_id,
+            worker_id="worker-bad",
+        )

@@ -260,7 +260,10 @@ class WorkerPool:
         turn_marker: str | None = None,
     ) -> dict:
         worker = self._find_worker(crew_id, worker_id)
-        observation = self._native_session.observe(terminal_pane=worker["terminal_pane"], lines=lines, turn_marker=turn_marker)
+        pane = worker.get("terminal_pane")
+        if not pane:
+            raise FileNotFoundError(f"worker {worker_id} has no terminal pane")
+        observation = self._native_session.observe(terminal_pane=pane, lines=lines, turn_marker=turn_marker)
         message_blocks = parse_codex_message_blocks(
             observation.get("snapshot", ""),
             crew_id=crew_id,
@@ -308,11 +311,14 @@ class WorkerPool:
 
     def stop_worker(self, *, repo_root: Path, crew_id: str, worker_id: str, workspace_cleanup: str = "keep") -> dict:
         worker = self._find_worker(crew_id, worker_id)
+        session = worker.get("terminal_session")
+        if not session:
+            raise FileNotFoundError(f"worker {worker_id} has no terminal session")
         cleanup_result = {"removed": False, "reason": "keep policy"}
         if workspace_cleanup == "remove":
             allocation = self._read_worker_allocation(crew_id, worker)
             cleanup_result = self._worktree_manager.cleanup(repo_root=repo_root, allocation=allocation, remove=True)
-        result = self._native_session.stop(terminal_session=worker["terminal_session"])
+        result = self._native_session.stop(terminal_session=session)
         self._mark_worker_stopped(crew_id, worker_id)
         if self._domain_events:
             self._domain_events.emit_worker_stopped(crew_id, worker_id)
