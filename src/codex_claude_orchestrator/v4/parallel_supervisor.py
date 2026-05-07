@@ -70,6 +70,7 @@ class ParallelSupervisor:
                 crew_id=crew_id,
                 goal=goal,
                 round_id=round_id,
+                repo_root=repo_root,
                 cancel_event=cancel_event,
             )
             events.append({"action": "parallel_watch", "round": round_index, "results": unit_results})
@@ -173,6 +174,7 @@ class ParallelSupervisor:
         crew_id: str,
         goal: str,
         round_id: str,
+        repo_root: Path,
         cancel_event: threading.Event | None = None,
     ) -> list[dict[str, Any]]:
         """Run watch+review for all pending subtasks in parallel using asyncio.gather."""
@@ -187,6 +189,7 @@ class ParallelSupervisor:
                     crew_id=crew_id,
                     goal=goal,
                     round_id=round_id,
+                    repo_root=repo_root,
                     cancel_event=cancel_event,
                 )
                 for st in pending
@@ -216,11 +219,12 @@ class ParallelSupervisor:
         crew_id: str,
         goal: str,
         round_id: str,
+        repo_root: Path,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         """Watch a single worker turn and run unit review if turn completes."""
         subtask.status = "running"
-        worker_info = self._spawn_worker(subtask, crew_id=crew_id)
+        worker_info = self._spawn_worker(subtask, crew_id=crew_id, repo_root=repo_root)
         subtask.worker_id = worker_info["worker_id"]
 
         turn_id = f"{round_id}-{subtask.worker_id}-source"
@@ -254,6 +258,8 @@ class ParallelSupervisor:
             crew_id=crew_id,
             goal=goal,
             round_id=round_id,
+            repo_root=repo_root,
+            cancel_event=cancel_event,
         )
 
         if review_result["verdict"] == "pass":
@@ -280,6 +286,8 @@ class ParallelSupervisor:
         crew_id: str,
         goal: str,
         round_id: str,
+        repo_root: Path,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         """Run adversarial unit review for a single subtask's changes."""
         changes = self._controller.changes(
@@ -294,6 +302,7 @@ class ParallelSupervisor:
             subtask,
             crew_id=crew_id,
             role="reviewer",
+            repo_root=repo_root,
         )
         reviewer_id = reviewer_info["worker_id"]
         review_turn_id = f"{round_id}-{subtask.task_id}-unit-review"
@@ -317,6 +326,7 @@ class ParallelSupervisor:
             contract_id=reviewer_info.get("contract_id", ""),
             message=review_message,
             expected_marker=review_marker,
+            cancel_event=cancel_event,
         )
 
         # Parse verdict from events
@@ -409,6 +419,7 @@ class ParallelSupervisor:
         subtask: SubTask,
         *,
         crew_id: str,
+        repo_root: Path,
         role: str = "implementer",
     ) -> dict[str, Any]:
         """Spawn a worker via controller.ensure_worker with a contract for the subtask."""
@@ -433,7 +444,7 @@ class ParallelSupervisor:
             )
 
         return self._controller.ensure_worker(
-            repo_root=Path("."),
+            repo_root=repo_root,
             crew_id=crew_id,
             contract=contract,
         )
