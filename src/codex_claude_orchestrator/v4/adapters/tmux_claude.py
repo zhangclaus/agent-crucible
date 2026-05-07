@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -19,6 +20,15 @@ from codex_claude_orchestrator.v4.runtime import (
 
 def _non_empty_str(value) -> str:
     return value if isinstance(value, str) and value else ""
+
+
+async def _cancelable_sleep(seconds: float, cancel: threading.Event) -> None:
+    """Sleep that returns early if cancel event is set."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if cancel.is_set():
+            return
+        await asyncio.sleep(min(0.1, end - time.monotonic()))
 
 
 def _terminal_pane_for(turn: TurnEnvelope, worker: WorkerSpec | None) -> str:
@@ -172,6 +182,134 @@ class ClaudeCodeTmuxAdapter:
 
                 # Backoff sleep (cancellable)
                 if cancel.wait(delay):
+                    yield RuntimeEvent(
+                        type="runtime.cancelled",
+                        turn_id=turn.turn_id,
+                        worker_id=turn.worker_id,
+                        payload={"reason": "cancelled"},
+                    )
+                    return
+                delay = min(delay * 2, self._poll_max_delay)
+
+    async def async_watch_turn(self, turn: TurnEnvelope, cancel_event: threading.Event | None = None):
+        """Async version of watch_turn for parallel worker support."""
+        worker = self._workers.get(turn.worker_id)
+        terminal_pane = _terminal_pane_for(turn, worker)
+        cancel = cancel_event or self._cancel
+
+        # Early cancellation check
+        if cancel.is_set():
+            yield RuntimeEvent(
+                type="runtime.cancelled",
+                turn_id=turn.turn_id,
+                worker_id=turn.worker_id,
+                payload={"reason": "cancelled"},
+            )
+            return
+
+        # Reuse sync filesystem stream
+        for event in self._watch_filesystem_stream(turn, worker, cancel_event=cancel):
+            yield event
+
+        max_attempts = 1 + self._poll_retries
+        last_text = ""
+        last_artifact_refs: list[str] = []
+
+        for attempt in range(max_attempts):
+            delay = self._poll_initial_delay
+            deadline = time.monotonic() + self._poll_timeout
+
+            while True:
+                # Cancellation check at top of loop
+                if cancel.is_set():
+                    yield RuntimeEvent(
+                        type="runtime.cancelled",
+                        turn_id=turn.turn_id,
+                        worker_id=turn.worker_id,
+                        payload={"reason": "cancelled"},
+                    )
+                    return
+
+                try:
+                    observation = self._native_session.observe(
+                        terminal_pane=terminal_pane,
+                        lines=200,
+                        turn_marker=turn.expected_marker,
+                    )
+                except Exception as exc:
+                    yield RuntimeEvent(
+                        type="runtime.observe_failed",
+                        turn_id=turn.turn_id,
+                        worker_id=turn.worker_id,
+                        payload={"source": "tmux", "error": str(exc)},
+                    )
+                    return
+
+                text = _non_empty_str(observation.get("snapshot"))
+                transcript_artifact = _non_empty_str(observation.get("transcript_artifact"))
+                artifact_refs = [transcript_artifact] if transcript_artifact else []
+
+                # Incremental output: only yield new text
+                if text and text != last_text:
+                    if len(text) >= len(last_text):
+                        new_part = text[len(last_text):]
+                    else:
+                        # Terminal scrolled — old output lost, yield full snapshot
+                        new_part = text
+                    if new_part.strip():
+                        yield RuntimeEvent(
+                            type="output.chunk",
+                            turn_id=turn.turn_id,
+                            worker_id=turn.worker_id,
+                            payload={"text": new_part},
+                            artifact_refs=artifact_refs,
+                        )
+                    last_text = text
+                    last_artifact_refs = artifact_refs
+
+                # Marker found
+                if observation.get("marker_seen") is True:
+                    marker = _non_empty_str(observation.get("marker")) or turn.expected_marker
+                    yield RuntimeEvent(
+                        type="marker.detected",
+                        turn_id=turn.turn_id,
+                        worker_id=turn.worker_id,
+                        payload={
+                            "marker": marker,
+                            "source": "tmux",
+                        },
+                        artifact_refs=last_artifact_refs or artifact_refs,
+                    )
+                    return
+
+                # Timeout
+                if time.monotonic() >= deadline:
+                    if attempt < max_attempts - 1:
+                        yield RuntimeEvent(
+                            type="runtime.poll_retry",
+                            turn_id=turn.turn_id,
+                            worker_id=turn.worker_id,
+                            payload={
+                                "attempt": attempt + 1,
+                                "max_attempts": max_attempts,
+                                "timeout_seconds": self._poll_timeout,
+                            },
+                        )
+                        break  # break inner loop, continue outer retry loop
+                    yield RuntimeEvent(
+                        type="runtime.poll_timeout",
+                        turn_id=turn.turn_id,
+                        worker_id=turn.worker_id,
+                        payload={
+                            "timeout_seconds": self._poll_timeout,
+                            "total_attempts": max_attempts,
+                        },
+                    )
+                    return
+
+                # Async cancellable backoff sleep
+                await _cancelable_sleep(delay, cancel)
+                if cancel.is_set():
                     yield RuntimeEvent(
                         type="runtime.cancelled",
                         turn_id=turn.turn_id,

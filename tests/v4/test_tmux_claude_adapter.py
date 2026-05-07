@@ -1,3 +1,4 @@
+import asyncio
 import json
 import threading
 from pathlib import Path
@@ -987,3 +988,235 @@ def test_watch_filesystem_stream_respects_cancel(tmp_path: Path):
     assert "worker.outbox.detected" not in types
     # The cancel event should still be emitted from the polling loop
     assert "runtime.cancelled" in types
+
+
+# ---------------------------------------------------------------------------
+# async_watch_turn tests
+# ---------------------------------------------------------------------------
+
+
+class AsyncFakeNativeSession:
+    """FakeNativeSession variant that supports a sequence of observe results."""
+
+    def __init__(self, observe_sequence=None):
+        self._observe = observe_sequence or []
+        self._observe_idx = 0
+        self.sent = []
+
+    def send(self, terminal_pane, message, turn_marker=None):
+        self.sent.append({"terminal_pane": terminal_pane, "message": message, "turn_marker": turn_marker})
+        return {"delivered": True, "marker": turn_marker}
+
+    def observe(self, terminal_pane, lines=200, turn_marker=None):
+        if self._observe_idx < len(self._observe):
+            result = self._observe[self._observe_idx]
+            self._observe_idx += 1
+            return result
+        return {"snapshot": "", "marker_seen": False}
+
+
+def _make_async_turn():
+    return TurnEnvelope(
+        crew_id="c1",
+        worker_id="w1",
+        turn_id="t1",
+        round_id="round-1",
+        phase="source",
+        message="do work",
+        expected_marker="<<<DONE>>>",
+    )
+
+
+def test_async_watch_turn_emits_output_and_marker():
+    """async_watch_turn yields output.chunk and marker.detected events."""
+    native = AsyncFakeNativeSession(
+        observe_sequence=[
+            {
+                "snapshot": "hello\n<<<DONE>>>",
+                "marker": "<<<DONE>>>",
+                "marker_seen": True,
+                "transcript_artifact": "",
+            },
+        ]
+    )
+    adapter = ClaudeCodeTmuxAdapter(
+        native_session=native,
+        poll_initial_delay=0.01,
+        poll_timeout=5.0,
+    )
+    turn = _make_async_turn()
+
+    async def _collect():
+        events = []
+        async for event in adapter.async_watch_turn(turn):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_collect())
+    types = [e.type for e in events]
+
+    assert "output.chunk" in types
+    assert "marker.detected" in types
+    assert events[-1].type == "marker.detected"
+    assert events[-1].payload["marker"] == "<<<DONE>>>"
+    assert events[-1].turn_id == "t1"
+    assert events[-1].worker_id == "w1"
+
+
+def test_async_watch_turn_respects_pre_set_cancel():
+    """Pre-set cancel_event yields runtime.cancelled immediately."""
+    cancel = threading.Event()
+    cancel.set()
+    native = AsyncFakeNativeSession(
+        observe_sequence=[
+            {
+                "snapshot": "hello<<<DONE>>>",
+                "marker": "<<<DONE>>>",
+                "marker_seen": True,
+                "transcript_artifact": "",
+            },
+        ]
+    )
+    adapter = ClaudeCodeTmuxAdapter(
+        native_session=native,
+        poll_initial_delay=0.01,
+        poll_timeout=5.0,
+        cancel_event=cancel,
+    )
+    turn = _make_async_turn()
+
+    async def _collect():
+        events = []
+        async for event in adapter.async_watch_turn(turn):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_collect())
+    types = [e.type for e in events]
+
+    assert "runtime.cancelled" in types
+    assert "output.chunk" not in types
+    assert "marker.detected" not in types
+    cancel_event = [e for e in events if e.type == "runtime.cancelled"][0]
+    assert cancel_event.payload["reason"] == "cancelled"
+    assert cancel_event.turn_id == "t1"
+    assert cancel_event.worker_id == "w1"
+
+
+def test_async_watch_turn_cancel_during_polling():
+    """Cancel set during poll loop yields runtime.cancelled."""
+    call_count = 0
+    cancel = threading.Event()
+
+    def observe_counting(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        return {
+            "snapshot": "still working",
+            "marker": "<<<DONE>>>",
+            "marker_seen": False,
+            "transcript_artifact": "",
+        }
+
+    native = AsyncFakeNativeSession()
+    native.observe = observe_counting
+    adapter = ClaudeCodeTmuxAdapter(
+        native_session=native,
+        poll_initial_delay=0.01,
+        poll_max_delay=0.05,
+        poll_timeout=300.0,
+        cancel_event=cancel,
+    )
+
+    # Set cancel after a brief delay so the first poll completes
+    async def _set_cancel_later():
+        await asyncio.sleep(0.1)
+        cancel.set()
+
+    turn = _make_async_turn()
+
+    async def _collect():
+        results = await asyncio.gather(
+            _drain_async_watch(adapter, turn),
+            _set_cancel_later(),
+        )
+        return results[0]
+
+    async def _drain_async_watch(adapt, t):
+        events = []
+        async for event in adapt.async_watch_turn(t):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_collect())
+    types = [e.type for e in events]
+
+    assert "runtime.cancelled" in types
+    cancel_event = [e for e in events if e.type == "runtime.cancelled"][0]
+    assert cancel_event.payload["reason"] == "cancelled"
+
+
+def test_async_watch_turn_observe_failed():
+    """async_watch_turn yields runtime.observe_failed on exception."""
+    call_count = 0
+
+    def observe_failing(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("tmux session dead")
+        return {"snapshot": "", "marker_seen": False}
+
+    native = AsyncFakeNativeSession()
+    native.observe = observe_failing
+    adapter = ClaudeCodeTmuxAdapter(
+        native_session=native,
+        poll_initial_delay=0.01,
+        poll_timeout=5.0,
+    )
+    turn = _make_async_turn()
+
+    async def _collect():
+        events = []
+        async for event in adapter.async_watch_turn(turn):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_collect())
+    assert len(events) == 1
+    assert events[0].type == "runtime.observe_failed"
+    assert events[0].payload["source"] == "tmux"
+    assert "tmux session dead" in events[0].payload["error"]
+
+
+def test_async_watch_turn_timeout():
+    """async_watch_turn yields runtime.poll_timeout when deadline exceeded."""
+    native = AsyncFakeNativeSession(
+        observe_sequence=[
+            {
+                "snapshot": "still going",
+                "marker": "<<<DONE>>>",
+                "marker_seen": False,
+                "transcript_artifact": "",
+            },
+        ]
+    )
+    adapter = ClaudeCodeTmuxAdapter(
+        native_session=native,
+        poll_initial_delay=0.01,
+        poll_timeout=0.0,
+        poll_retries=0,
+    )
+    turn = _make_async_turn()
+
+    async def _collect():
+        events = []
+        async for event in adapter.async_watch_turn(turn):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_collect())
+    types = [e.type for e in events]
+    assert "runtime.poll_timeout" in types
+    timeout_event = [e for e in events if e.type == "runtime.poll_timeout"][0]
+    assert timeout_event.payload["timeout_seconds"] == 0.0
