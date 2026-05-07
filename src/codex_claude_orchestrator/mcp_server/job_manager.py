@@ -76,6 +76,7 @@ class JobManager:
         max_rounds: int = 3,
         parallel: bool = False,
         max_workers: int = 3,
+        subtasks: list[dict[str, str]] | None = None,
     ) -> str:
         """Create a job, start background thread, return job_id."""
         job_id = f"job-{uuid.uuid4().hex[:8]}"
@@ -88,12 +89,16 @@ class JobManager:
             try:
                 if parallel:
                     import asyncio
-                    subtasks = _split_goal_into_subtasks(goal)
+                    if subtasks:
+                        from codex_claude_orchestrator.v4.subtask import SubTask
+                        parsed = [SubTask.from_dict(s) for s in subtasks]
+                    else:
+                        parsed = _split_goal_into_subtasks(goal)
                     result = asyncio.run(runner.async_supervise(
                         repo_root=repo_root,
                         crew_id=crew_id or f"crew-{job_id}",
                         goal=goal,
-                        subtasks=subtasks,
+                        subtasks=parsed,
                         verification_commands=verification_commands or ["echo ok"],
                         max_rounds=max_rounds,
                         max_workers=max_workers,

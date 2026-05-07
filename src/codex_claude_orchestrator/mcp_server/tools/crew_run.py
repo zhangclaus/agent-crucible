@@ -31,6 +31,7 @@ def register_run_tools(
         max_rounds: int = 3,
         parallel: bool = False,
         max_workers: int = 3,
+        subtasks: list[dict[str, str]] | None = None,
     ) -> list[TextContent]:
         """Start a crew job in the background (non-blocking).
 
@@ -48,6 +49,10 @@ def register_run_tools(
             max_rounds: Maximum supervision rounds
             parallel: Enable parallel worker mode (default False)
             max_workers: Max concurrent workers in parallel mode (default 3)
+            subtasks: Optional list of subtask dicts with keys task_id,
+                description, scope (list of paths). When provided with
+                parallel=True, these are used instead of the default
+                single-subtask split.
         """
         if runner is None:
             if repo not in _runner_cache:
@@ -65,6 +70,7 @@ def register_run_tools(
             max_rounds=max_rounds,
             parallel=parallel,
             max_workers=max_workers,
+            subtasks=subtasks,
         )
 
         return [

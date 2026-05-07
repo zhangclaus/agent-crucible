@@ -501,3 +501,30 @@ def test_job_manager_create_parallel_job(tmp_path):
     job = manager.get_job(job_id)
     assert job.status == "done"
     assert job.result is not None
+
+
+def test_create_job_with_external_subtasks(tmp_path):
+    """create_job should use externally provided subtasks when given."""
+    manager = JobManager()
+    runner = FakeRunner(delay=0.0)
+
+    external_subtasks = [
+        {"task_id": "auth", "description": "Implement auth", "scope": ["src/auth/"]},
+        {"task_id": "users", "description": "Implement users", "scope": ["src/users/"]},
+    ]
+
+    job_id = manager.create_job(
+        runner=runner,
+        repo_root=tmp_path,
+        goal="build auth and users",
+        verification_commands=["echo ok"],
+        max_rounds=1,
+        parallel=True,
+        max_workers=2,
+        subtasks=external_subtasks,
+    )
+
+    assert job_id.startswith("job-")
+    time.sleep(0.3)
+    job = manager.get_job(job_id)
+    assert job.status == "done"
