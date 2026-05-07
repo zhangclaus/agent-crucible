@@ -212,3 +212,70 @@ def test_crew_stop_worker():
     controller.stop_worker.assert_called_once_with(
         repo_root=Path("/repo"), crew_id="c1", worker_id="w1",
     )
+
+
+def test_crew_start_returns_error_on_exception():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.start.side_effect = RuntimeError("spawn failed")
+    register_lifecycle_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_start"](repo="/repo", goal="test"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+    assert "spawn failed" in data["error"]
+
+
+def test_crew_stop_returns_error_on_file_not_found():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.stop.side_effect = FileNotFoundError("crew not found: c1")
+    register_lifecycle_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_stop"](repo="/repo", crew_id="c1"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+def test_crew_status_returns_error_on_file_not_found():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.status.side_effect = FileNotFoundError("crew not found: c1")
+    register_lifecycle_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_status"](repo="/repo", crew_id="c1"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+def test_crew_verify_returns_error_on_value_error():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.verify.side_effect = ValueError("verify not configured")
+    register_lifecycle_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_verify"](crew_id="c1", command="pytest"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+def test_crew_spawn_returns_error_on_exception():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.ensure_worker.side_effect = RuntimeError("spawn failed")
+    register_lifecycle_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_spawn"](repo="/repo", crew_id="c1", label="my-worker"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+def test_crew_stop_worker_returns_error_on_file_not_found():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.stop_worker.side_effect = FileNotFoundError("worker not found: w1")
+    register_lifecycle_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_stop_worker"](repo="/repo", crew_id="c1", worker_id="w1"))
+    data = json.loads(result[0].text)
+    assert "error" in data

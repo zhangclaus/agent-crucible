@@ -97,30 +97,51 @@ def register_lifecycle_tools(server: Server, controller) -> None:
         roles: list[str] | None = None,
     ) -> list[TextContent]:
         """启动一个 Crew。roles 默认为 explorer, implementer, reviewer。"""
-        selected = roles or ["explorer", "implementer", "reviewer"]
-        worker_roles = [WorkerRole(r) for r in selected]
-        crew = controller.start(
-            repo_root=Path(repo),
-            goal=goal,
-            worker_roles=worker_roles,
-        )
-        return [TextContent(type="text", text=json.dumps({
-            "crew_id": crew.crew_id,
-            "status": crew.status.value,
-        }))]
+        try:
+            selected = roles or ["explorer", "implementer", "reviewer"]
+            worker_roles = [WorkerRole(r) for r in selected]
+            crew = controller.start(
+                repo_root=Path(repo),
+                goal=goal,
+                worker_roles=worker_roles,
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "crew_id": crew.crew_id,
+                "status": crew.status.value,
+            }))]
+        except FileNotFoundError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except ValueError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except Exception as exc:
+            return [TextContent(type="text", text=json.dumps({"error": f"internal: {exc}"}, ensure_ascii=False))]
 
     @server.tool("crew_stop")
     async def crew_stop(repo: str, crew_id: str) -> list[TextContent]:
         """停止整个 Crew。"""
-        controller.stop(repo_root=Path(repo), crew_id=crew_id)
-        return [TextContent(type="text", text=json.dumps({"status": "stopped", "crew_id": crew_id}))]
+        try:
+            controller.stop(repo_root=Path(repo), crew_id=crew_id)
+            return [TextContent(type="text", text=json.dumps({"status": "stopped", "crew_id": crew_id}))]
+        except FileNotFoundError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except ValueError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except Exception as exc:
+            return [TextContent(type="text", text=json.dumps({"error": f"internal: {exc}"}, ensure_ascii=False))]
 
     @server.tool("crew_status")
     async def crew_status(repo: str, crew_id: str) -> list[TextContent]:
         """获取 Crew 状态摘要（压缩后，非原始 dump）。"""
-        raw = controller.status(repo_root=Path(repo), crew_id=crew_id)
-        compressed = compress_crew_status(raw)
-        return [TextContent(type="text", text=json.dumps(compressed, ensure_ascii=False))]
+        try:
+            raw = controller.status(repo_root=Path(repo), crew_id=crew_id)
+            compressed = compress_crew_status(raw)
+            return [TextContent(type="text", text=json.dumps(compressed, ensure_ascii=False))]
+        except FileNotFoundError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except ValueError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except Exception as exc:
+            return [TextContent(type="text", text=json.dumps({"error": f"internal: {exc}"}, ensure_ascii=False))]
 
     @server.tool("crew_verify")
     async def crew_verify(
@@ -129,8 +150,15 @@ def register_lifecycle_tools(server: Server, controller) -> None:
         worker_id: str | None = None,
     ) -> list[TextContent]:
         """Run a verification command (e.g. pytest, ruff check)."""
-        result = controller.verify(crew_id=crew_id, command=command, worker_id=worker_id)
-        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+        try:
+            result = controller.verify(crew_id=crew_id, command=command, worker_id=worker_id)
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+        except FileNotFoundError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except ValueError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except Exception as exc:
+            return [TextContent(type="text", text=json.dumps({"error": f"internal: {exc}"}, ensure_ascii=False))]
 
     @server.tool("crew_spawn")
     async def crew_spawn(
@@ -141,28 +169,35 @@ def register_lifecycle_tools(server: Server, controller) -> None:
         write_scope: list[str] | None = None,
     ) -> list[TextContent]:
         """Spawn a worker agent. label can be a template name (targeted-code-editor, repo-context-scout, patch-risk-auditor, verification-failure-analyst, frontend-developer, backend-developer, test-writer, summarizer) or a custom label. write_scope limits which files the worker can modify."""
-        template = WORKER_TEMPLATES.get(label)
-        overrides: dict = {"mission": mission or template.mission} if template else {}
-        if write_scope is not None:
-            overrides["write_scope"] = write_scope
-        if template:
-            contract = replace(template, **overrides)
-        else:
-            contract = WorkerContract(
-                contract_id=f"contract-{label}",
-                label=label,
-                mission=mission,
-                required_capabilities=["inspect_code", "edit_source"],
-                authority_level=AuthorityLevel.SOURCE_WRITE,
-                workspace_policy=WorkspacePolicy.WORKTREE,
-                **({"write_scope": write_scope} if write_scope else {}),
+        try:
+            template = WORKER_TEMPLATES.get(label)
+            overrides: dict = {"mission": mission or template.mission} if template else {}
+            if write_scope is not None:
+                overrides["write_scope"] = write_scope
+            if template:
+                contract = replace(template, **overrides)
+            else:
+                contract = WorkerContract(
+                    contract_id=f"contract-{label}",
+                    label=label,
+                    mission=mission,
+                    required_capabilities=["inspect_code", "edit_source"],
+                    authority_level=AuthorityLevel.SOURCE_WRITE,
+                    workspace_policy=WorkspacePolicy.WORKTREE,
+                    **({"write_scope": write_scope} if write_scope else {}),
+                )
+            result = controller.ensure_worker(
+                repo_root=Path(repo),
+                crew_id=crew_id,
+                contract=contract,
             )
-        result = controller.ensure_worker(
-            repo_root=Path(repo),
-            crew_id=crew_id,
-            contract=contract,
-        )
-        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+        except FileNotFoundError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except ValueError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except Exception as exc:
+            return [TextContent(type="text", text=json.dumps({"error": f"internal: {exc}"}, ensure_ascii=False))]
 
     @server.tool("crew_stop_worker")
     async def crew_stop_worker(
@@ -171,9 +206,16 @@ def register_lifecycle_tools(server: Server, controller) -> None:
         worker_id: str,
     ) -> list[TextContent]:
         """Stop a specific worker agent."""
-        result = controller.stop_worker(
-            repo_root=Path(repo),
-            crew_id=crew_id,
-            worker_id=worker_id,
-        )
-        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+        try:
+            result = controller.stop_worker(
+                repo_root=Path(repo),
+                crew_id=crew_id,
+                worker_id=worker_id,
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+        except FileNotFoundError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except ValueError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except Exception as exc:
+            return [TextContent(type="text", text=json.dumps({"error": f"internal: {exc}"}, ensure_ascii=False))]
