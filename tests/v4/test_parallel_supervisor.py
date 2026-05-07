@@ -546,3 +546,46 @@ async def test_integration_review_respects_cancel(tmp_path: Path) -> None:
     # Should have been cancelled before running second verification
     assert result["status"] == "cancelled"
     assert len(verify_calls) == 1  # Only first command ran
+
+
+@pytest.mark.asyncio
+async def test_per_worker_timeout(tmp_path: Path) -> None:
+    """A slow worker should be timed out without blocking other workers."""
+    import asyncio
+
+    changes_map = {
+        "worker-source-task-1": {"changed_files": ["src/a.py"], "worker_id": "worker-source-task-1"},
+        "worker-source-task-2": {"changed_files": ["src/b.py"], "worker_id": "worker-source-task-2"},
+    }
+    controller = _make_controller(changes_map=changes_map)
+
+    call_count = [0]
+
+    async def slow_then_fast(*, cancel_event=None, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            await asyncio.sleep(10)  # First call hangs
+            return {"status": "turn_completed", "turn_id": "t1"}
+        return {"status": "turn_completed", "turn_id": "t2"}
+
+    supervisor = MagicMock()
+    supervisor.async_run_worker_turn = AsyncMock(side_effect=slow_then_fast)
+    event_store = _make_event_store()
+
+    ps = ParallelSupervisor(controller=controller, supervisor=supervisor, event_store=event_store)
+    subtasks = [_make_subtask("task-1"), _make_subtask("task-2")]
+
+    result = await ps.supervise(
+        repo_root=tmp_path,
+        crew_id="crew-1",
+        goal="Build feature X",
+        subtasks=subtasks,
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+        worker_timeout=0.5,
+    )
+
+    # Task-1 should have timed out, task-2 should have succeeded
+    # At least one subtask should be failed (the timed-out one)
+    statuses = [st.status for st in subtasks]
+    assert "failed" in statuses

@@ -42,6 +42,7 @@ class ParallelSupervisor:
         max_workers: int = 3,
         progress_callback: Callable[[str, int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
+        worker_timeout: float = 1800.0,
     ) -> dict[str, Any]:
         """Main supervision loop: run parallel watch+review per round, then integration review."""
         events: list[dict[str, Any]] = []
@@ -73,6 +74,7 @@ class ParallelSupervisor:
                 repo_root=repo_root,
                 max_workers=max_workers,
                 cancel_event=cancel_event,
+                worker_timeout=worker_timeout,
             )
             events.append({"action": "parallel_watch", "round": round_index, "results": unit_results})
 
@@ -188,6 +190,7 @@ class ParallelSupervisor:
         repo_root: Path,
         max_workers: int = 3,
         cancel_event: threading.Event | None = None,
+        worker_timeout: float = 1800.0,
     ) -> list[dict[str, Any]]:
         """Run watch+review for all pending subtasks in parallel using asyncio.gather."""
         pending = [st for st in subtasks if st.status in ("pending", "failed")]
@@ -205,6 +208,7 @@ class ParallelSupervisor:
                     round_id=round_id,
                     repo_root=repo_root,
                     cancel_event=cancel_event,
+                    worker_timeout=worker_timeout,
                 )
 
         results = await asyncio.gather(
@@ -236,6 +240,7 @@ class ParallelSupervisor:
         round_id: str,
         repo_root: Path,
         cancel_event: threading.Event | None = None,
+        worker_timeout: float = 1800.0,
     ) -> dict[str, Any]:
         """Watch a single worker turn and run unit review if turn completes."""
         subtask.status = "running"
@@ -246,17 +251,29 @@ class ParallelSupervisor:
             turn_id = f"{round_id}-{subtask.worker_id}-source"
             marker = f"<<<CODEX_TURN_DONE crew={crew_id} worker={subtask.worker_id} phase=source>>>"
 
-            turn_result = await self._supervisor.async_run_worker_turn(
-                crew_id=crew_id,
-                goal=goal,
-                worker_id=subtask.worker_id,
-                round_id=round_id,
-                phase="source",
-                contract_id=worker_info.get("contract_id", ""),
-                message=f"Complete subtask: {subtask.description}",
-                expected_marker=marker,
-                cancel_event=cancel_event,
-            )
+            try:
+                turn_result = await asyncio.wait_for(
+                    self._supervisor.async_run_worker_turn(
+                        crew_id=crew_id,
+                        goal=goal,
+                        worker_id=subtask.worker_id,
+                        round_id=round_id,
+                        phase="source",
+                        contract_id=worker_info.get("contract_id", ""),
+                        message=f"Complete subtask: {subtask.description}",
+                        expected_marker=marker,
+                        cancel_event=cancel_event,
+                    ),
+                    timeout=worker_timeout,
+                )
+            except asyncio.TimeoutError:
+                subtask.status = "failed"
+                subtask.result = {"error": f"worker timed out after {worker_timeout}s"}
+                return {
+                    "task_id": subtask.task_id,
+                    "unit_review": "fail",
+                    "reason": f"worker timed out after {worker_timeout}s",
+                }
 
             if turn_result.get("status") != "turn_completed":
                 subtask.status = "failed"
