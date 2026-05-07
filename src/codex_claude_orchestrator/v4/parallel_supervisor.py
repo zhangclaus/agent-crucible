@@ -125,8 +125,18 @@ class ParallelSupervisor:
                 subtasks=subtasks,
                 crew_id=crew_id,
                 verification_commands=verification_commands,
+                cancel_event=cancel_event,
             )
             events.append({"action": "integration_review", "round": round_index, **integration})
+
+            if integration["status"] == "cancelled":
+                return {
+                    "crew_id": crew_id,
+                    "status": "cancelled",
+                    "runtime": "v4-parallel",
+                    "rounds": round_index,
+                    "events": events,
+                }
 
             if integration["status"] == "pass":
                 return {
@@ -363,6 +373,7 @@ class ParallelSupervisor:
         subtasks: list[SubTask],
         crew_id: str,
         verification_commands: list[str],
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         """Run integration review: conflict detection + verification commands."""
         # Collect changes from all passed subtasks
@@ -392,8 +403,10 @@ class ParallelSupervisor:
                 "conflicts": conflicts,
             }
 
-        # Run verification commands
+        # Run verification commands (with cancellation checks)
         for command in verification_commands:
+            if cancel_event and cancel_event.is_set():
+                return {"status": "cancelled", "reason": "cancelled during verification"}
             try:
                 result = self._controller.verify(crew_id=crew_id, command=command)
                 if not result.get("passed", False):

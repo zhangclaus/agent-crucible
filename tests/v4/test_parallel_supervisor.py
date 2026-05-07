@@ -503,3 +503,46 @@ async def test_worker_cleanup_on_turn_failure(tmp_path: Path) -> None:
     assert result["status"] == "max_rounds_exhausted"
     # Controller should have been asked to release the worker
     controller.release_worker.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_integration_review_respects_cancel(tmp_path: Path) -> None:
+    """Integration review should check cancel_event between verification commands."""
+    changes_map = {
+        "worker-source-task-1": {"changed_files": ["src/a.py"], "worker_id": "worker-source-task-1"},
+    }
+    cancel = threading.Event()
+
+    verify_calls = []
+
+    def verify_side_effect(**kwargs):
+        verify_calls.append(1)
+        if len(verify_calls) == 1:
+            cancel.set()  # Cancel after first verification
+        return {"passed": True, "summary": "ok"}
+
+    controller = _make_controller(changes_map=changes_map)
+    controller.verify = MagicMock(side_effect=verify_side_effect)
+
+    supervisor = _make_supervisor(turn_results=[
+        {"status": "turn_completed", "turn_id": "t1"},
+        {"status": "turn_completed", "turn_id": "review-t1"},
+    ])
+    event_store = _make_event_store(events_by_turn={"review-t1": []})
+
+    ps = ParallelSupervisor(controller=controller, supervisor=supervisor, event_store=event_store)
+    subtasks = [_make_subtask("task-1")]
+
+    result = await ps.supervise(
+        repo_root=tmp_path,
+        crew_id="crew-1",
+        goal="Build feature X",
+        subtasks=subtasks,
+        verification_commands=["pytest -q", "mypy src/"],  # 2 commands
+        max_rounds=1,
+        cancel_event=cancel,
+    )
+
+    # Should have been cancelled before running second verification
+    assert result["status"] == "cancelled"
+    assert len(verify_calls) == 1  # Only first command ran
