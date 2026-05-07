@@ -271,3 +271,36 @@ def test_crew_run_parallel_completes():
 
     assert data["status"] == "done"
     assert data["result"]["status"] == "ready_for_codex_accept"
+
+
+def test_crew_job_status_shows_subtasks_in_parallel_mode():
+    """crew_job_status should show subtask progress for parallel jobs."""
+    server = FakeServer()
+    jm = JobManager()
+    runner = FakeRunner(delay=0.0)
+    register_run_tools(server, None, jm, runner=runner)
+
+    # Create a parallel job
+    result = asyncio.run(server.tools["crew_run"](
+        repo="/tmp",
+        goal="implement auth",
+        parallel=True,
+        max_workers=2,
+    ))
+    job_id = json.loads(result[0].text)["job_id"]
+
+    # Manually update subtasks
+    jm.update_job_subtasks(job_id, [
+        {"task_id": "st-1", "description": "Auth", "status": "passed"},
+        {"task_id": "st-2", "description": "Users", "status": "running"},
+    ])
+
+    status = asyncio.run(server.tools["crew_job_status"](job_id=job_id))
+    data = json.loads(status[0].text)
+
+    assert "subtasks" in data
+    assert len(data["subtasks"]) == 2
+    assert data["subtasks"][0]["task_id"] == "st-1"
+    assert data["subtasks"][0]["status"] == "passed"
+    assert data["subtasks"][1]["task_id"] == "st-2"
+    assert data["subtasks"][1]["status"] == "running"

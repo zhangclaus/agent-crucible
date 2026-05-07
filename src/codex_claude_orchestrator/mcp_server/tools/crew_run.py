@@ -119,6 +119,8 @@ def register_run_tools(
                 base["result"] = snap["result"]
             if status == "failed" and snap["error"]:
                 base["error"] = snap["error"]
+            if snap.get("subtasks"):
+                base["subtasks"] = snap["subtasks"]
             return [
                 TextContent(
                     type="text",
@@ -148,18 +150,21 @@ def register_run_tools(
         class _Snap:
             elapsed_seconds = snap["elapsed_seconds"]
 
+        delta = {
+            "job_id": snap["job_id"],
+            "status": "running",
+            "phase": snap["phase"],
+            "round": snap["current_round"],
+            "elapsed": elapsed,
+            "poll_after_seconds": _next_poll_seconds(_Snap()),
+        }
+        if snap.get("subtasks"):
+            delta["subtasks"] = snap["subtasks"]
+
         return [
             TextContent(
                 type="text",
-                text=json.dumps(
-                    {
-                        "job_id": snap["job_id"],
-                        "status": "running",
-                        "phase": snap["phase"],
-                        "round": snap["current_round"],
-                        "elapsed": elapsed,
-                        "poll_after_seconds": _next_poll_seconds(_Snap()),
-                    }
+                text=json.dumps(delta,
                 ),
             )
         ]

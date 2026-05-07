@@ -23,6 +23,7 @@ class Job:
     cancel_event: threading.Event = field(default_factory=threading.Event)
     thread: threading.Thread | None = None
     completed_at: float | None = None
+    subtasks: list[dict[str, Any]] | None = None  # parallel mode subtask tracking
     _start_time: float = field(default_factory=time.monotonic, repr=False)
 
     # Delta tracking
@@ -191,6 +192,7 @@ class JobManager:
                     job.phase != job.last_reported_phase
                     or job.current_round != job.last_reported_round
                 ),
+                "subtasks": job.subtasks,
             }
 
     def mark_job_reported(self, job_id: str) -> None:
@@ -200,6 +202,13 @@ class JobManager:
             if job is not None:
                 job.last_reported_phase = job.phase
                 job.last_reported_round = job.current_round
+
+    def update_job_subtasks(self, job_id: str, subtasks: list[dict[str, Any]]) -> None:
+        """Update subtask status for a parallel job."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.subtasks = subtasks
 
     def cancel_job(self, job_id: str) -> bool:
         """Cancel a running job. Returns True if cancellation was initiated, False if already terminal."""
