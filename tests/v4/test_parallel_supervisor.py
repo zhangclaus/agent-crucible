@@ -430,3 +430,46 @@ async def test_progress_callback_invoked(tmp_path: Path) -> None:
     phase_names = [p[0] for p in phases]
     assert "watching" in phase_names
     assert "integration" in phase_names
+
+
+@pytest.mark.asyncio
+async def test_max_workers_limits_concurrency(tmp_path: Path) -> None:
+    """max_workers should limit how many workers run concurrently."""
+    import asyncio
+
+    concurrency = 0
+    max_concurrency = 0
+
+    changes_map = {
+        f"worker-source-task-{i}": {"changed_files": [f"src/f{i}.py"], "worker_id": f"worker-source-task-{i}"}
+        for i in range(1, 5)
+    }
+    controller = _make_controller(changes_map=changes_map)
+
+    async def tracking_run_worker_turn(*, cancel_event=None, **kwargs):
+        nonlocal concurrency, max_concurrency
+        concurrency += 1
+        max_concurrency = max(max_concurrency, concurrency)
+        await asyncio.sleep(0.05)  # Simulate work
+        concurrency -= 1
+        return {"status": "turn_completed", "turn_id": f"turn-{kwargs.get('worker_id', 'x')}"}
+
+    supervisor = MagicMock()
+    supervisor.async_run_worker_turn = AsyncMock(side_effect=tracking_run_worker_turn)
+
+    event_store = _make_event_store()
+
+    ps = ParallelSupervisor(controller=controller, supervisor=supervisor, event_store=event_store)
+    subtasks = [_make_subtask(f"task-{i}") for i in range(1, 5)]
+
+    result = await ps.supervise(
+        repo_root=tmp_path,
+        crew_id="crew-1",
+        goal="Build feature X",
+        subtasks=subtasks,
+        verification_commands=["pytest -q"],
+        max_rounds=1,
+        max_workers=2,
+    )
+
+    assert max_concurrency <= 2, f"Expected max 2 concurrent workers, got {max_concurrency}"

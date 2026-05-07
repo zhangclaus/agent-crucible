@@ -71,6 +71,7 @@ class ParallelSupervisor:
                 goal=goal,
                 round_id=round_id,
                 repo_root=repo_root,
+                max_workers=max_workers,
                 cancel_event=cancel_event,
             )
             events.append({"action": "parallel_watch", "round": round_index, "results": unit_results})
@@ -175,6 +176,7 @@ class ParallelSupervisor:
         goal: str,
         round_id: str,
         repo_root: Path,
+        max_workers: int = 3,
         cancel_event: threading.Event | None = None,
     ) -> list[dict[str, Any]]:
         """Run watch+review for all pending subtasks in parallel using asyncio.gather."""
@@ -182,18 +184,21 @@ class ParallelSupervisor:
         if not pending:
             return []
 
-        results = await asyncio.gather(
-            *[
-                self._watch_and_review_one(
-                    subtask=st,
+        semaphore = asyncio.Semaphore(max_workers)
+
+        async def _limited_watch_and_review(subtask: SubTask) -> dict[str, Any]:
+            async with semaphore:
+                return await self._watch_and_review_one(
+                    subtask=subtask,
                     crew_id=crew_id,
                     goal=goal,
                     round_id=round_id,
                     repo_root=repo_root,
                     cancel_event=cancel_event,
                 )
-                for st in pending
-            ],
+
+        results = await asyncio.gather(
+            *[_limited_watch_and_review(st) for st in pending],
             return_exceptions=True,
         )
 
