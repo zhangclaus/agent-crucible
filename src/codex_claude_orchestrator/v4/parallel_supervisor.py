@@ -232,10 +232,10 @@ class ParallelSupervisor:
         worker_info = self._spawn_worker(subtask, crew_id=crew_id, repo_root=repo_root)
         subtask.worker_id = worker_info["worker_id"]
 
-        turn_id = f"{round_id}-{subtask.worker_id}-source"
-        marker = f"<<<CODEX_TURN_DONE crew={crew_id} worker={subtask.worker_id} phase=source>>>"
-
         try:
+            turn_id = f"{round_id}-{subtask.worker_id}-source"
+            marker = f"<<<CODEX_TURN_DONE crew={crew_id} worker={subtask.worker_id} phase=source>>>"
+
             turn_result = await self._supervisor.async_run_worker_turn(
                 crew_id=crew_id,
                 goal=goal,
@@ -247,49 +247,45 @@ class ParallelSupervisor:
                 expected_marker=marker,
                 cancel_event=cancel_event,
             )
-        except Exception:
+
+            if turn_result.get("status") != "turn_completed":
+                subtask.status = "failed"
+                subtask.result = turn_result
+                return {
+                    "task_id": subtask.task_id,
+                    "unit_review": "fail",
+                    "reason": f"turn not completed: {turn_result.get('status', 'unknown')}",
+                }
+
+            # Unit review
+            subtask.status = "unit_review"
+            review_result = await self._run_unit_review(
+                subtask,
+                crew_id=crew_id,
+                goal=goal,
+                round_id=round_id,
+                repo_root=repo_root,
+                cancel_event=cancel_event,
+            )
+
+            if review_result["verdict"] == "pass":
+                subtask.status = "passed"
+                subtask.result = {"turn": turn_result, "review": review_result}
+                return {
+                    "task_id": subtask.task_id,
+                    "unit_review": "pass",
+                    "reason": review_result.get("reason", ""),
+                }
+            else:
+                subtask.status = "failed"
+                subtask.result = {"turn": turn_result, "review": review_result}
+                return {
+                    "task_id": subtask.task_id,
+                    "unit_review": "fail",
+                    "reason": review_result.get("reason", "unit review blocked"),
+                }
+        finally:
             self._release_worker(subtask.worker_id, crew_id)
-            raise
-
-        if turn_result.get("status") != "turn_completed":
-            subtask.status = "failed"
-            subtask.result = turn_result
-            self._release_worker(subtask.worker_id, crew_id)
-            return {
-                "task_id": subtask.task_id,
-                "unit_review": "fail",
-                "reason": f"turn not completed: {turn_result.get('status', 'unknown')}",
-            }
-
-        # Unit review
-        subtask.status = "unit_review"
-        review_result = await self._run_unit_review(
-            subtask,
-            crew_id=crew_id,
-            goal=goal,
-            round_id=round_id,
-            repo_root=repo_root,
-            cancel_event=cancel_event,
-        )
-
-        self._release_worker(subtask.worker_id, crew_id)
-
-        if review_result["verdict"] == "pass":
-            subtask.status = "passed"
-            subtask.result = {"turn": turn_result, "review": review_result}
-            return {
-                "task_id": subtask.task_id,
-                "unit_review": "pass",
-                "reason": review_result.get("reason", ""),
-            }
-        else:
-            subtask.status = "failed"
-            subtask.result = {"turn": turn_result, "review": review_result}
-            return {
-                "task_id": subtask.task_id,
-                "unit_review": "fail",
-                "reason": review_result.get("reason", "unit review blocked"),
-            }
 
     async def _run_unit_review(
         self,
@@ -317,18 +313,19 @@ class ParallelSupervisor:
             repo_root=repo_root,
         )
         reviewer_id = reviewer_info["worker_id"]
-        review_marker = f"<<<CODEX_TURN_DONE crew={crew_id} worker={reviewer_id} phase=unit_review>>>"
-
-        changed_files = ", ".join(changes.get("changed_files", []))
-        review_message = (
-            f"Review the changes for subtask '{subtask.description}' (task_id={subtask.task_id}).\n"
-            f"Changed files: {changed_files}\n"
-            f"Goal: {goal}\n\n"
-            "If the changes have issues, write BLOCK in your summary. "
-            "If the changes look correct, write OK in your summary."
-        )
 
         try:
+            review_marker = f"<<<CODEX_TURN_DONE crew={crew_id} worker={reviewer_id} phase=unit_review>>>"
+
+            changed_files = ", ".join(changes.get("changed_files", []))
+            review_message = (
+                f"Review the changes for subtask '{subtask.description}' (task_id={subtask.task_id}).\n"
+                f"Changed files: {changed_files}\n"
+                f"Goal: {goal}\n\n"
+                "If the changes have issues, write BLOCK in your summary. "
+                "If the changes look correct, write OK in your summary."
+            )
+
             review_result = await self._supervisor.async_run_worker_turn(
                 crew_id=crew_id,
                 goal=goal,
@@ -340,28 +337,25 @@ class ParallelSupervisor:
                 expected_marker=review_marker,
                 cancel_event=cancel_event,
             )
-        except Exception:
+
+            # Parse verdict from events — use the actual turn_id from the result,
+            # falling back to the worker_id-based format (not task_id) to match
+            # how async_run_worker_turn stores events.
+            turn_id = review_result.get("turn_id", f"{round_id}-{reviewer_id}-unit_review")
+            events = self._event_store.list_by_turn(turn_id)
+
+            verdict = "pass"
+            reason = ""
+            for event in reversed(events):
+                summary = event.payload.get("summary", "")
+                if isinstance(summary, str) and "BLOCK" in summary:
+                    verdict = "block"
+                    reason = summary
+                    break
+
+            return {"verdict": verdict, "reason": reason}
+        finally:
             self._release_worker(reviewer_id, crew_id)
-            raise
-
-        # Parse verdict from events — use the actual turn_id from the result,
-        # falling back to the worker_id-based format (not task_id) to match
-        # how async_run_worker_turn stores events.
-        turn_id = review_result.get("turn_id", f"{round_id}-{reviewer_id}-unit_review")
-        events = self._event_store.list_by_turn(turn_id)
-
-        verdict = "pass"
-        reason = ""
-        for event in reversed(events):
-            summary = event.payload.get("summary", "")
-            if isinstance(summary, str) and "BLOCK" in summary:
-                verdict = "block"
-                reason = summary
-                break
-
-        self._release_worker(reviewer_id, crew_id)
-
-        return {"verdict": verdict, "reason": reason}
 
     def _run_integration_review(
         self,
