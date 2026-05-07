@@ -198,6 +198,25 @@ def test_turn_service_preexisting_delivery_started_returns_in_progress(
     assert adapter.delivered == []
 
 
+def test_delivery_locks_cleaned_up_after_use(tmp_path: Path) -> None:
+    """Lock entries should be removed after request_and_deliver completes."""
+    from codex_claude_orchestrator.v4.turns import _delivery_locks, _delivery_locks_guard
+
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+    adapter = FakeAdapter()
+    service = TurnService(event_store=store, adapter=adapter)
+
+    with _delivery_locks_guard:
+        initial_count = len(_delivery_locks)
+
+    service.request_and_deliver(make_turn())
+
+    with _delivery_locks_guard:
+        final_count = len(_delivery_locks)
+
+    assert final_count <= initial_count
+
+
 def test_turn_service_new_attempt_after_failure_delivers_again(tmp_path: Path) -> None:
     store = SQLiteEventStore(tmp_path / "events.sqlite3")
     adapter = FakeAdapter(delivered=False, reason="marker missing")

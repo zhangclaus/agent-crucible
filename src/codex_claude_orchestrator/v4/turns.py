@@ -31,16 +31,22 @@ class TurnService:
         with _delivery_locks_guard:
             delivery_lock = _delivery_locks[lock_key]
 
-        with delivery_lock:
-            delivered_result = self._stored_delivered_result(turn)
-            if delivered_result is not None:
-                return delivered_result
+        try:
+            with delivery_lock:
+                delivered_result = self._stored_delivered_result(turn)
+                if delivered_result is not None:
+                    return delivered_result
 
-            failed_result = self._stored_failed_result(turn)
-            if failed_result is not None:
-                return failed_result
+                failed_result = self._stored_failed_result(turn)
+                if failed_result is not None:
+                    return failed_result
 
-            return self._request_and_deliver_claimed(turn)
+                return self._request_and_deliver_claimed(turn)
+        finally:
+            with _delivery_locks_guard:
+                key = (turn.crew_id, turn.turn_id, turn.attempt)
+                if key in _delivery_locks and _delivery_locks[key] is delivery_lock:
+                    del _delivery_locks[key]
 
     def _request_and_deliver_claimed(self, turn: TurnEnvelope) -> DeliveryResult:
         self._events.append(
