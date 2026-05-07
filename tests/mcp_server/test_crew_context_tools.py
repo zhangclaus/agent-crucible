@@ -110,12 +110,16 @@ def test_crew_observe_calls_controller():
     from pathlib import Path
     server = FakeServer()
     controller = MagicMock()
-    controller.observe_worker.return_value = {"snapshot": "worker output here"}
+    controller.observe_worker.return_value = {"snapshot": "worker output here", "marker_seen": True, "message_blocks": []}
     register_context_tools(server, controller)
     import asyncio
     result = asyncio.run(server.tools["crew_observe"](repo="/repo", crew_id="c1", worker_id="w1"))
     data = json.loads(result[0].text)
-    assert "snapshot" in data
+    assert "status" in data
+    assert "summary" in data
+    assert "changed_files" in data
+    assert "marker_seen" in data
+    assert "snapshot" not in data
     controller.observe_worker.assert_called_once_with(
         repo_root=Path("/repo"), crew_id="c1", worker_id="w1",
     )
@@ -125,38 +129,51 @@ def test_crew_changes_calls_controller():
     server = FakeServer()
     controller = MagicMock()
     controller.changes.return_value = [
-        {"file": "src/foo.py", "status": "modified"},
+        {"worker_id": "w1", "changed_files": ["src/foo.py", "src/bar.py"]},
     ]
     register_context_tools(server, controller)
     import asyncio
     result = asyncio.run(server.tools["crew_changes"](crew_id="c1"))
     data = json.loads(result[0].text)
-    assert len(data) == 1
-    assert data[0]["file"] == "src/foo.py"
+    assert data == ["src/foo.py", "src/bar.py"]
     controller.changes.assert_called_once_with(crew_id="c1")
+
+
+def test_crew_changes_aggregates_multiple_workers():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.changes.return_value = [
+        {"worker_id": "w1", "changed_files": ["src/foo.py"]},
+        {"worker_id": "w2", "changed_files": ["src/bar.py", "src/foo.py"]},
+    ]
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_changes"](crew_id="c1"))
+    data = json.loads(result[0].text)
+    assert data == ["src/foo.py", "src/bar.py"]  # deduplicated
 
 
 def test_crew_diff_calls_controller():
     server = FakeServer()
     controller = MagicMock()
     controller.changes.return_value = [
-        {"file": "src/foo.py", "diff": "@@ -1 +1 @@"},
-        {"file": "src/bar.py", "diff": "@@ -5 +5 @@"},
+        {"worker_id": "w1", "changed_files": ["src/foo.py", "src/bar.py"], "branch": "codex/c1-w1"},
     ]
     register_context_tools(server, controller)
     import asyncio
     result = asyncio.run(server.tools["crew_diff"](crew_id="c1", file="src/foo.py"))
     data = json.loads(result[0].text)
     assert len(data) == 1
-    assert data[0]["file"] == "src/foo.py"
+    assert data[0]["worker_id"] == "w1"
+    assert "src/foo.py" in data[0]["changed_files"]
 
 
 def test_crew_diff_returns_all_when_no_file():
     server = FakeServer()
     controller = MagicMock()
     controller.changes.return_value = [
-        {"file": "src/foo.py", "diff": "@@ -1 +1 @@"},
-        {"file": "src/bar.py", "diff": "@@ -5 +5 @@"},
+        {"worker_id": "w1", "changed_files": ["src/foo.py"], "branch": "b1"},
+        {"worker_id": "w2", "changed_files": ["src/bar.py"], "branch": "b2"},
     ]
     register_context_tools(server, controller)
     import asyncio
@@ -244,3 +261,58 @@ def test_crew_blackboard_no_trigger_without_repo():
     data = json.loads(result[0].text)
     assert len(data) > 0
     controller.ensure_worker.assert_not_called()
+
+
+def test_crew_blackboard_returns_error_on_exception():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.blackboard_entries.side_effect = FileNotFoundError("crew not found: c1")
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_blackboard"](crew_id="c1"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+def test_crew_events_returns_error_on_exception():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.status.side_effect = FileNotFoundError("crew not found: c1")
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_events"](repo="/repo", crew_id="c1"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+def test_crew_observe_returns_error_on_exception():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.observe_worker.side_effect = FileNotFoundError("worker not found: w1")
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_observe"](repo="/repo", crew_id="c1", worker_id="w1"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+def test_crew_changes_returns_error_on_value_error():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.changes.side_effect = ValueError("change recorder not configured")
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_changes"](crew_id="c1"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+def test_crew_diff_returns_error_on_exception():
+    server = FakeServer()
+    controller = MagicMock()
+    controller.changes.side_effect = FileNotFoundError("crew not found: c1")
+    register_context_tools(server, controller)
+    import asyncio
+    result = asyncio.run(server.tools["crew_diff"](crew_id="c1"))
+    data = json.loads(result[0].text)
+    assert "error" in data
