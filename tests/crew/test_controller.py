@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from codex_claude_orchestrator.state.blackboard import BlackboardStore
 from codex_claude_orchestrator.crew.controller import CrewController
@@ -822,3 +823,27 @@ def test_challenge_writes_blackboard_entry(tmp_path: Path):
     assert challenge_entry["actor_type"] == "supervisor"
     assert challenge_entry["actor_id"] == "supervisor"
     assert challenge_entry["confidence"] == 0.9
+
+
+def test_read_worker_allocation_raises_on_missing_artifact(tmp_path: Path):
+    """_read_worker_allocation should raise FileNotFoundError when workspace_allocation_artifact missing."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    recorder = MagicMock()
+    # read_crew returns a worker dict that exists but has no workspace_allocation_artifact key
+    recorder.read_crew.return_value = {
+        "crew": {"crew_id": "crew-1"},
+        "workers": [{"worker_id": "w1"}],
+        "tasks": [],
+        "artifacts": [],
+        "blackboard": [],
+    }
+    controller = CrewController(
+        recorder=recorder,
+        blackboard=MagicMock(),
+        task_graph=TaskGraphPlanner(),
+        worker_pool=FakeWorkerPool(),
+    )
+
+    with pytest.raises(FileNotFoundError, match="has no workspace allocation"):
+        controller._read_worker_allocation("c1", "w1")

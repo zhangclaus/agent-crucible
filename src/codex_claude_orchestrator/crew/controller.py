@@ -568,7 +568,9 @@ class CrewController:
         worker = next((item for item in details["workers"] if item["worker_id"] == worker_id), None)
         if worker is None:
             raise FileNotFoundError(f"worker not found: {worker_id}")
-        artifact = worker["workspace_allocation_artifact"]
+        artifact = worker.get("workspace_allocation_artifact")
+        if not artifact:
+            raise FileNotFoundError(f"worker {worker_id} has no workspace allocation")
         payload = json.loads((self._crew_artifact_root(crew_id) / artifact).read_text(encoding="utf-8"))
         return WorkspaceAllocation(
             workspace_id=payload["workspace_id"],
