@@ -39,21 +39,6 @@ from codex_claude_orchestrator.workspace.worktree_manager import WorktreeManager
 from codex_claude_orchestrator.workspace.manager import WorkspaceManager
 
 
-BUILTIN_CAPABILITIES = [
-    "inspect_code",
-    "edit_source",
-    "edit_tests",
-    "review_patch",
-    "run_verification",
-    "browser_e2e",
-    "research_external",
-    "write_docs",
-    "design_architecture",
-    "triage_failure",
-    "maintain_guardrails",
-]
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="orchestrator")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -111,9 +96,6 @@ def build_parser() -> argparse.ArgumentParser:
     crew_status = crew_subparsers.add_parser("status", help="Show crew status")
     crew_status.add_argument("--repo", required=True)
     crew_status.add_argument("--crew", required=False)
-    crew_blackboard = crew_subparsers.add_parser("blackboard", help="Show crew blackboard")
-    crew_blackboard.add_argument("--repo", required=True)
-    crew_blackboard.add_argument("--crew", required=False)
     crew_verify = crew_subparsers.add_parser("verify", help="Run crew verification")
     crew_verify.add_argument("--repo", required=True)
     crew_verify.add_argument("--crew", required=False)
@@ -132,70 +114,19 @@ def build_parser() -> argparse.ArgumentParser:
     crew_stop = crew_subparsers.add_parser("stop", help="Stop all native Claude sessions for a crew")
     crew_stop.add_argument("--repo", required=True)
     crew_stop.add_argument("--crew", required=False)
-    crew_prune = crew_subparsers.add_parser("prune", help="Prune orphaned crew tmux sessions")
-    crew_prune.add_argument("--repo", required=True)
     crew_changes = crew_subparsers.add_parser("changes", help="Record worker changed files")
     crew_changes.add_argument("--repo", required=True)
     crew_changes.add_argument("--crew", required=False)
     crew_changes.add_argument("--worker", required=True)
-    crew_merge_plan = crew_subparsers.add_parser("merge-plan", help="Build a crew merge plan")
-    crew_merge_plan.add_argument("--repo", required=True)
-    crew_merge_plan.add_argument("--crew", required=False)
-    crew_supervise = crew_subparsers.add_parser("supervise", help="Reserved for a local crew supervisor loop")
-    crew_supervise.add_argument("--repo", required=True)
-    crew_supervise.add_argument("--crew", required=False)
-    crew_supervise.add_argument("--verification-command", action="append", required=True)
-    crew_supervise.add_argument("--max-rounds", type=int, default=3)
-    crew_supervise.add_argument("--poll-interval", type=float, default=1800.0)
-    crew_supervise.add_argument("--poll-retries", type=int, default=3)
-    crew_supervise.add_argument("--dynamic", action="store_true")
-    crew_contracts = crew_subparsers.add_parser("contracts", help="List dynamic worker contracts")
-    crew_contracts.add_argument("--repo", required=True)
-    crew_contracts.add_argument("--crew", required=False)
-    crew_messages = crew_subparsers.add_parser("messages", help="List crew message bus entries")
-    crew_messages.add_argument("--repo", required=True)
-    crew_messages.add_argument("--crew", required=False)
-    crew_events = crew_subparsers.add_parser("events", help="List V4 crew events")
-    crew_events.add_argument("--repo", required=True)
-    crew_events.add_argument("--crew", required=True)
     crew_event_store_health = crew_subparsers.add_parser("event-store-health", help="Show V4 event-store health")
     crew_event_store_health.add_argument("--repo", required=True)
-    crew_inbox = crew_subparsers.add_parser("inbox", help="Read a worker inbox")
-    crew_inbox.add_argument("--repo", required=True)
-    crew_inbox.add_argument("--crew", required=False)
-    crew_inbox.add_argument("--worker", required=True)
-    crew_protocols = crew_subparsers.add_parser("protocols", help="List protocol request state changes")
-    crew_protocols.add_argument("--repo", required=True)
-    crew_protocols.add_argument("--crew", required=False)
-    crew_decisions = crew_subparsers.add_parser("decisions", help="List dynamic decision actions")
-    crew_decisions.add_argument("--repo", required=True)
-    crew_decisions.add_argument("--crew", required=False)
-    crew_snapshot = crew_subparsers.add_parser("snapshot", help="Show team snapshot")
-    crew_snapshot.add_argument("--repo", required=True)
-    crew_snapshot.add_argument("--crew", required=False)
-    crew_resume_context = crew_subparsers.add_parser("resume-context", help="Show replay context for resuming supervision")
-    crew_resume_context.add_argument("--repo", required=True)
-    crew_resume_context.add_argument("--crew", required=False)
-    crew_capabilities = crew_subparsers.add_parser("capabilities", help="Inspect capability vocabulary")
-    crew_capability_subparsers = crew_capabilities.add_subparsers(dest="crew_capability_command", required=True)
-    crew_capability_list = crew_capability_subparsers.add_parser("list", help="List builtin capabilities")
-    crew_capability_list.add_argument("--repo", required=True)
-    crew_capability_show = crew_capability_subparsers.add_parser("show", help="Show a builtin capability")
-    crew_capability_show.add_argument("--repo", required=True)
-    crew_capability_show.add_argument("--capability", required=True)
     crew_worker = crew_subparsers.add_parser("worker", help="Operate a crew worker")
     crew_worker_subparsers = crew_worker.add_subparsers(dest="crew_worker_command", required=True)
-    for command_name in ("send", "observe", "attach", "tail", "status", "stop"):
+    for command_name in ("status", "stop"):
         command = crew_worker_subparsers.add_parser(command_name, help=f"{command_name} a crew worker")
         command.add_argument("--repo", required=True)
         command.add_argument("--crew", required=False)
         command.add_argument("--worker", required=True)
-        if command_name == "send":
-            command.add_argument("--message", required=True)
-        if command_name == "observe":
-            command.add_argument("--lines", type=int, default=200)
-        if command_name == "tail":
-            command.add_argument("--limit", type=int, default=80)
         if command_name == "stop":
             command.add_argument("--workspace-cleanup", choices=("keep", "remove"), default="keep")
 
@@ -380,12 +311,6 @@ def resolve_root_command(args: argparse.Namespace) -> str:
 
 def handle_crew_command(args) -> int:
     repo_root = Path(args.repo).resolve()
-    if args.crew_command == "events":
-        if not repo_root.exists():
-            raise ValueError(f"repo does not exist: {repo_root}")
-        event_store = build_v4_event_store(repo_root, readonly=True)
-        print(json.dumps([event.to_dict() for event in event_store.list_stream(args.crew)], ensure_ascii=False))
-        return 0
     if args.crew_command == "event-store-health":
         if not repo_root.exists():
             raise ValueError(f"repo does not exist: {repo_root}")
@@ -395,26 +320,6 @@ def handle_crew_command(args) -> int:
 
     controller = build_crew_controller(repo_root)
     recorder = CrewRecorder(repo_root / ".orchestrator")
-    if args.crew_command == "capabilities":
-        if args.crew_capability_command == "list":
-            print(json.dumps({"capabilities": BUILTIN_CAPABILITIES}, ensure_ascii=False))
-            return 0
-        if args.crew_capability_command == "show":
-            if args.capability not in BUILTIN_CAPABILITIES:
-                raise ValueError(f"unknown capability: {args.capability}")
-            print(
-                json.dumps(
-                    {
-                        "capability": args.capability,
-                        "available": True,
-                        "summary": f"Builtin dynamic worker capability: {args.capability}",
-                    },
-                    ensure_ascii=False,
-                )
-            )
-            return 0
-        raise ValueError(f"Unsupported crew capabilities command: {args.crew_capability_command}")
-
     if args.crew_command == "start":
         if args.spawn_policy == "dynamic" and args.workers == "auto":
             crew = controller.start_dynamic(repo_root=repo_root, goal=args.goal)
@@ -466,10 +371,6 @@ def handle_crew_command(args) -> int:
         )
         return 0
 
-    if args.crew_command == "prune":
-        print(json.dumps(controller.prune_orphans(repo_root=repo_root), ensure_ascii=False))
-        return 0
-
     crew_id = args.crew or recorder.latest_crew_id()
     if not crew_id:
         raise ValueError("no crew id provided and no latest crew exists")
@@ -490,9 +391,6 @@ def handle_crew_command(args) -> int:
                 )
                 return 0
         print(json.dumps(controller.status(repo_root=repo_root, crew_id=crew_id), ensure_ascii=False))
-        return 0
-    if args.crew_command == "blackboard":
-        print(json.dumps({"blackboard": controller.blackboard_entries(crew_id=crew_id)}, ensure_ascii=False))
         return 0
     if args.crew_command == "verify":
         print(json.dumps(controller.verify(crew_id=crew_id, command=args.command, worker_id=args.worker), ensure_ascii=False))
@@ -519,73 +417,8 @@ def handle_crew_command(args) -> int:
     if args.crew_command == "changes":
         print(json.dumps(controller.changes(crew_id=crew_id, worker_id=args.worker), ensure_ascii=False))
         return 0
-    if args.crew_command == "merge-plan":
-        print(json.dumps(controller.merge_plan(crew_id=crew_id), ensure_ascii=False))
-        return 0
-    if args.crew_command == "supervise":
-        runner = build_v4_crew_runner(repo_root, controller, poll_timeout=args.poll_interval, poll_retries=args.poll_retries)
-        print(
-            json.dumps(
-                runner.supervise(
-                    repo_root=repo_root,
-                    crew_id=crew_id,
-                    verification_commands=args.verification_command,
-                    max_rounds=args.max_rounds,
-                    poll_interval_seconds=args.poll_interval,
-                    **({"dynamic": True} if args.dynamic else {}),
-                ),
-                ensure_ascii=False,
-            )
-        )
-        return 0
-    if args.crew_command == "contracts":
-        print(json.dumps({"contracts": recorder.read_crew(crew_id)["worker_contracts"]}, ensure_ascii=False))
-        return 0
-    if args.crew_command == "messages":
-        print(json.dumps({"messages": recorder.read_crew(crew_id)["messages"]}, ensure_ascii=False))
-        return 0
-    if args.crew_command == "inbox":
-        from codex_claude_orchestrator.messaging.message_bus import AgentMessageBus
-
-        print(
-            json.dumps(
-                {"messages": AgentMessageBus(recorder).read_inbox(crew_id=crew_id, recipient=args.worker, mark_read=True)},
-                ensure_ascii=False,
-            )
-        )
-        return 0
-    if args.crew_command == "protocols":
-        print(json.dumps({"protocol_requests": recorder.read_crew(crew_id)["protocol_requests"]}, ensure_ascii=False))
-        return 0
-    if args.crew_command == "decisions":
-        print(json.dumps({"decisions": recorder.read_crew(crew_id)["decisions"]}, ensure_ascii=False))
-        return 0
-    if args.crew_command == "snapshot":
-        print(json.dumps({"team_snapshot": recorder.read_crew(crew_id)["team_snapshot"]}, ensure_ascii=False))
-        return 0
-    if args.crew_command == "resume-context":
-        print(json.dumps(controller.resume_context(crew_id=crew_id), ensure_ascii=False))
-        return 0
     if args.crew_command == "worker":
-        if args.crew_worker_command == "send":
-            payload = controller.send_worker(
-                repo_root=repo_root,
-                crew_id=crew_id,
-                worker_id=args.worker,
-                message=args.message,
-            )
-        elif args.crew_worker_command == "observe":
-            payload = controller.observe_worker(
-                repo_root=repo_root,
-                crew_id=crew_id,
-                worker_id=args.worker,
-                lines=args.lines,
-            )
-        elif args.crew_worker_command == "attach":
-            payload = controller.attach_worker(repo_root=repo_root, crew_id=crew_id, worker_id=args.worker)
-        elif args.crew_worker_command == "tail":
-            payload = controller.tail_worker(repo_root=repo_root, crew_id=crew_id, worker_id=args.worker, limit=args.limit)
-        elif args.crew_worker_command == "status":
+        if args.crew_worker_command == "status":
             payload = controller.status_worker(repo_root=repo_root, crew_id=crew_id, worker_id=args.worker)
         elif args.crew_worker_command == "stop":
             payload = controller.stop_worker(

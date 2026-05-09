@@ -217,30 +217,6 @@ class FakeCrewController:
         self.calls.append({"method": "status", **kwargs})
         return {"crew": {"crew_id": kwargs["crew_id"]}}
 
-    def blackboard_entries(self, **kwargs):
-        self.calls.append({"method": "blackboard", **kwargs})
-        return [{"entry_id": "entry-cli"}]
-
-    def resume_context(self, **kwargs):
-        self.calls.append({"method": "resume_context", **kwargs})
-        return {"crew": {"crew_id": kwargs["crew_id"]}, "resume_hint": "resume safely"}
-
-    def send_worker(self, **kwargs):
-        self.calls.append({"method": "send_worker", **kwargs})
-        return {"marker_seen": True}
-
-    def observe_worker(self, **kwargs):
-        self.calls.append({"method": "observe_worker", **kwargs})
-        return {"snapshot": "Claude is reading"}
-
-    def attach_worker(self, **kwargs):
-        self.calls.append({"method": "attach_worker", **kwargs})
-        return {"attach_command": "tmux attach -t crew-cli-worker"}
-
-    def tail_worker(self, **kwargs):
-        self.calls.append({"method": "tail_worker", **kwargs})
-        return {"lines": ["one"]}
-
     def status_worker(self, **kwargs):
         self.calls.append({"method": "status_worker", **kwargs})
         return {"running": True}
@@ -252,11 +228,6 @@ class FakeCrewController:
     def stop(self, **kwargs):
         self.calls.append({"method": "stop", **kwargs})
         return {"crew_id": kwargs["crew_id"], "stopped_workers": [{"worker_id": "worker-explorer"}]}
-
-    def prune_orphans(self, **kwargs):
-        self.calls.append({"method": "prune_orphans", **kwargs})
-        return {"active_sessions": ["crew-cli-worker"], "pruned_sessions": ["crew-worker-old"]}
-
 
 class FakeV4MergeTransaction:
     def __init__(self, response=None):
@@ -272,10 +243,6 @@ class FakeV4CrewRunner:
     def __init__(self):
         self.calls = []
 
-    def supervise(self, **kwargs):
-        self.calls.append({"method": "supervise", **kwargs})
-        return {"crew_id": kwargs["crew_id"], "status": "ready_for_codex_accept", "runtime": "v4"}
-
     def run(self, **kwargs):
         self.calls.append({"method": "run", **kwargs})
         return {"crew_id": "crew-cli", "status": "ready_for_codex_accept", "runtime": "v4"}
@@ -288,20 +255,6 @@ def test_build_parser_exposes_crew_start_and_worker_commands():
     subparsers_action = next(action for action in parser._actions if action.dest == "command")
 
     assert "crew" in subparsers_action.choices
-
-
-def test_main_crew_capabilities_list_prints_builtin_dynamic_vocabulary(tmp_path: Path):
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        exit_code = main(["crew", "capabilities", "list", "--repo", str(repo_root)])
-
-    payload = json.loads(stdout.getvalue())
-    assert exit_code == 0
-    assert "inspect_code" in payload["capabilities"]
-    assert "review_patch" in payload["capabilities"]
 
 
 def test_main_crew_start_prints_json_and_propagates_dirty_flag(tmp_path: Path, monkeypatch):
@@ -357,37 +310,7 @@ def test_main_crew_start_defaults_to_dynamic_control_plane(tmp_path: Path, monke
     assert fake_controller.calls[0]["method"] == "start_dynamic"
 
 
-def test_main_crew_worker_observe_routes_to_controller(tmp_path: Path, monkeypatch):
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    fake_controller = FakeCrewController()
-    monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_controller", lambda repo_root: fake_controller)
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        exit_code = main(
-            [
-                "crew",
-                "worker",
-                "observe",
-                "--repo",
-                str(repo_root),
-                "--crew",
-                "crew-cli",
-                "--worker",
-                "worker-explorer",
-                "--lines",
-                "120",
-            ]
-        )
-
-    payload = json.loads(stdout.getvalue())
-    assert exit_code == 0
-    assert payload["snapshot"] == "Claude is reading"
-    assert fake_controller.calls[0]["lines"] == 120
-
-
-def test_main_crew_stop_and_prune_route_to_controller(tmp_path: Path, monkeypatch):
+def test_main_crew_stop_and_worker_stop_route_to_controller(tmp_path: Path, monkeypatch):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     fake_controller = FakeCrewController()
@@ -415,18 +338,11 @@ def test_main_crew_stop_and_prune_route_to_controller(tmp_path: Path, monkeypatc
         crew_stop_exit = main(["crew", "stop", "--repo", str(repo_root), "--crew", "crew-cli"])
     crew_payload = json.loads(stdout.getvalue())
 
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        prune_exit = main(["crew", "prune", "--repo", str(repo_root)])
-    prune_payload = json.loads(stdout.getvalue())
-
     assert worker_stop_exit == 0
     assert crew_stop_exit == 0
-    assert prune_exit == 0
     assert worker_payload["stopped"] is True
     assert crew_payload["stopped_workers"][0]["worker_id"] == "worker-explorer"
-    assert prune_payload["pruned_sessions"] == ["crew-worker-old"]
-    assert [call["method"] for call in fake_controller.calls] == ["stop_worker", "stop", "prune_orphans"]
+    assert [call["method"] for call in fake_controller.calls] == ["stop_worker", "stop"]
 
 
 def test_main_crew_worker_stop_accepts_workspace_cleanup_policy(tmp_path: Path, monkeypatch):
@@ -545,24 +461,7 @@ def test_main_crew_accept_without_verification_command_is_blocked(
     assert fake_controller.calls == []
 
 
-def test_main_crew_resume_context_prints_replay_payload(tmp_path: Path, monkeypatch):
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    fake_controller = FakeCrewController()
-    monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_controller", lambda repo_root: fake_controller)
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        exit_code = main(["crew", "resume-context", "--repo", str(repo_root), "--crew", "crew-cli"])
-
-    payload = json.loads(stdout.getvalue())
-    assert exit_code == 0
-    assert payload["crew"]["crew_id"] == "crew-cli"
-    assert payload["resume_hint"] == "resume safely"
-    assert fake_controller.calls[0]["method"] == "resume_context"
-
-
-def test_main_crew_supervise_and_run_route_to_v4_crew_runner_by_default(
+def test_main_crew_run_routes_to_v4_crew_runner_by_default(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -575,26 +474,6 @@ def test_main_crew_supervise_and_run_route_to_v4_crew_runner_by_default(
         "codex_claude_orchestrator.cli.build_v4_crew_runner",
         lambda repo_root, controller, poll_timeout=1800.0, poll_retries=3: fake_runner,
     )
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        supervise_exit = main(
-            [
-                "crew",
-                "supervise",
-                "--repo",
-                str(repo_root),
-                "--crew",
-                "crew-cli",
-                "--verification-command",
-                "pytest -q",
-                "--max-rounds",
-                "2",
-                "--poll-interval",
-                "0",
-            ]
-        )
-    supervise_payload = json.loads(stdout.getvalue())
 
     stdout = StringIO()
     with redirect_stdout(stdout):
@@ -617,21 +496,10 @@ def test_main_crew_supervise_and_run_route_to_v4_crew_runner_by_default(
         )
     run_payload = json.loads(stdout.getvalue())
 
-    assert supervise_exit == 0
     assert run_exit == 0
-    assert supervise_payload["status"] == "ready_for_codex_accept"
-    assert supervise_payload["runtime"] == "v4"
     assert run_payload["crew_id"] == "crew-cli"
     assert run_payload["runtime"] == "v4"
     assert fake_runner.calls == [
-        {
-            "method": "supervise",
-            "repo_root": repo_root.resolve(),
-            "crew_id": "crew-cli",
-            "verification_commands": ["pytest -q"],
-            "max_rounds": 2,
-            "poll_interval_seconds": 0.0,
-        },
         {
             "method": "run",
             "repo_root": repo_root.resolve(),
@@ -718,58 +586,6 @@ def test_main_crew_run_can_use_static_legacy_worker_selection(tmp_path: Path, mo
     assert fake_runner.calls[0]["worker_roles"] == [WorkerRole.EXPLORER, WorkerRole.IMPLEMENTER, WorkerRole.REVIEWER]
 
 
-def test_cli_crew_events_lists_v4_events(tmp_path, monkeypatch):
-    from codex_claude_orchestrator.cli import main
-    from codex_claude_orchestrator.v4.event_store import SQLiteEventStore
-
-    monkeypatch.setenv("V4_EVENT_STORE_BACKEND", "sqlite")
-    store_path = tmp_path / ".orchestrator" / "v4" / "events.sqlite3"
-    store = SQLiteEventStore(store_path)
-    store.append(stream_id="crew-1", type="crew.started", crew_id="crew-1", payload={"goal": "Fix tests"})
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        result = main(["crew", "events", "--repo", str(tmp_path), "--crew", "crew-1"])
-
-    assert result == 0
-    assert "crew.started" in stdout.getvalue()
-
-
-def test_cli_crew_events_uses_v4_event_store_factory(tmp_path, monkeypatch):
-    from codex_claude_orchestrator.cli import main
-    from codex_claude_orchestrator.v4.events import AgentEvent
-
-    calls = []
-
-    class FakeStore:
-        def list_stream(self, stream_id: str, after_sequence: int = 0):
-            calls.append({"stream_id": stream_id, "after_sequence": after_sequence})
-            return [
-                AgentEvent(
-                    event_id="evt-1",
-                    stream_id=stream_id,
-                    sequence=1,
-                    type="crew.started",
-                    crew_id=stream_id,
-                )
-            ]
-
-    def fake_factory(repo_root, *, readonly=False):
-        calls.append({"repo_root": repo_root, "readonly": readonly})
-        return FakeStore()
-
-    monkeypatch.setattr("codex_claude_orchestrator.cli.build_v4_event_store", fake_factory)
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        result = main(["crew", "events", "--repo", str(tmp_path), "--crew", "crew-1"])
-
-    assert result == 0
-    assert "crew.started" in stdout.getvalue()
-    assert calls[0] == {"repo_root": tmp_path.resolve(), "readonly": True}
-    assert calls[1] == {"stream_id": "crew-1", "after_sequence": 0}
-
-
 def test_cli_crew_event_store_health_prints_factory_health(tmp_path, monkeypatch):
     from codex_claude_orchestrator.cli import main
 
@@ -833,49 +649,3 @@ def test_cli_crew_status_uses_v4_projection_when_events_exist(tmp_path, monkeypa
     assert payload["crew"]["status"] == "ready"
     assert payload["crew"]["root_goal"] == "Fix tests"
     assert fake_controller.calls == []
-
-
-def test_cli_crew_events_without_v4_db_is_read_only(tmp_path, monkeypatch):
-    from codex_claude_orchestrator.cli import main
-
-    monkeypatch.setenv("V4_EVENT_STORE_BACKEND", "sqlite")
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        result = main(["crew", "events", "--repo", str(repo_root), "--crew", "crew-1"])
-
-    assert result == 0
-    assert json.loads(stdout.getvalue()) == []
-    assert not (repo_root / ".orchestrator").exists()
-    assert not (repo_root / ".orchestrator" / "v4" / "events.sqlite3").exists()
-
-
-def test_cli_crew_events_existing_empty_db_is_read_only(tmp_path, monkeypatch):
-    from codex_claude_orchestrator.cli import main
-
-    monkeypatch.setenv("V4_EVENT_STORE_BACKEND", "sqlite")
-    repo_root = tmp_path / "repo"
-    event_store_path = repo_root / ".orchestrator" / "v4" / "events.sqlite3"
-    event_store_path.parent.mkdir(parents=True)
-    event_store_path.write_bytes(b"")
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        result = main(["crew", "events", "--repo", str(repo_root), "--crew", "crew-1"])
-
-    assert result == 0
-    assert json.loads(stdout.getvalue()) == []
-    assert event_store_path.read_bytes() == b""
-
-
-def test_cli_crew_events_missing_repo_does_not_create_state(tmp_path):
-    from codex_claude_orchestrator.cli import main
-
-    repo_root = tmp_path / "missing"
-
-    with pytest.raises(ValueError, match=f"repo does not exist: {repo_root.resolve()}"):
-        main(["crew", "events", "--repo", str(repo_root), "--crew", "crew-1"])
-
-    assert not repo_root.exists()
