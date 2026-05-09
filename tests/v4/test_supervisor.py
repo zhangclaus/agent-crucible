@@ -1052,5 +1052,8 @@ class TestAsyncRunWorkerTurnNonBlocking:
             )
             return results
 
+        start = time.monotonic()
         results = asyncio.run(run_two_workers())
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.08, f"Workers ran sequentially ({elapsed:.2f}s), expected concurrent"
         assert all(r["status"] == "turn_completed" for r in results)
