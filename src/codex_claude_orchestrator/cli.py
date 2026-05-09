@@ -2,7 +2,6 @@ import argparse
 import json
 import shutil
 import sys
-import warnings
 from collections.abc import Sequence
 from pathlib import Path
 from uuid import uuid4
@@ -18,7 +17,6 @@ from codex_claude_orchestrator.crew.models import WorkerRole
 from codex_claude_orchestrator.messaging.message_bus import AgentMessageBus
 from codex_claude_orchestrator.messaging.protocol_requests import ProtocolRequestStore
 from codex_claude_orchestrator.state.crew_recorder import CrewRecorder
-from codex_claude_orchestrator.crew.supervisor_loop import CrewSupervisorLoop
 from codex_claude_orchestrator.verification.crew_runner import CrewVerificationRunner
 from codex_claude_orchestrator.crew.merge_arbiter import MergeArbiter
 from codex_claude_orchestrator.core.models import TaskRecord, WorkspaceMode
@@ -150,7 +148,6 @@ def build_parser() -> argparse.ArgumentParser:
     crew_run.add_argument("--poll-interval", type=float, default=1800.0)
     crew_run.add_argument("--poll-retries", type=int, default=3)
     crew_run.add_argument("--allow-dirty-base", action="store_true")
-    crew_run.add_argument("--legacy-loop", action="store_true")
     crew_status = crew_subparsers.add_parser("status", help="Show crew status")
     crew_status.add_argument("--repo", required=True)
     crew_status.add_argument("--crew", required=False)
@@ -192,7 +189,6 @@ def build_parser() -> argparse.ArgumentParser:
     crew_supervise.add_argument("--poll-interval", type=float, default=1800.0)
     crew_supervise.add_argument("--poll-retries", type=int, default=3)
     crew_supervise.add_argument("--dynamic", action="store_true")
-    crew_supervise.add_argument("--legacy-loop", action="store_true")
     crew_contracts = crew_subparsers.add_parser("contracts", help="List dynamic worker contracts")
     crew_contracts.add_argument("--repo", required=True)
     crew_contracts.add_argument("--crew", required=False)
@@ -468,10 +464,6 @@ def build_crew_controller(repo_root: Path) -> CrewController:
         merge_arbiter=MergeArbiter(),
         event_store=event_store,
     )
-
-
-def build_crew_supervisor_loop(controller: CrewController) -> CrewSupervisorLoop:
-    return CrewSupervisorLoop(controller=controller)
 
 
 def build_v4_merge_transaction(
@@ -884,14 +876,7 @@ def handle_crew_command(args) -> int:
         return 0
 
     if args.crew_command == "run":
-        if args.legacy_loop:
-            warnings.warn(
-                "--legacy-loop is deprecated and will be removed in a future version. "
-                "The V4 crew runner is now the default.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        runner = build_crew_supervisor_loop(controller) if args.legacy_loop else build_v4_crew_runner(repo_root, controller, poll_timeout=args.poll_interval, poll_retries=args.poll_retries)
+        runner = build_v4_crew_runner(repo_root, controller, poll_timeout=args.poll_interval, poll_retries=args.poll_retries)
         if args.spawn_policy == "dynamic" and args.workers == "auto":
             result = runner.run(
                 repo_root=repo_root,
@@ -981,31 +966,7 @@ def handle_crew_command(args) -> int:
         print(json.dumps(controller.merge_plan(crew_id=crew_id), ensure_ascii=False))
         return 0
     if args.crew_command == "supervise":
-        if args.legacy_loop:
-            warnings.warn(
-                "--legacy-loop is deprecated and will be removed in a future version. "
-                "The V4 crew runner is now the default.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        runner = build_crew_supervisor_loop(controller) if args.legacy_loop else build_v4_crew_runner(repo_root, controller, poll_timeout=args.poll_interval, poll_retries=args.poll_retries)
-        if args.dynamic and args.legacy_loop:
-            print(
-                json.dumps(
-                    {
-                        **runner.supervise_dynamic(
-                            repo_root=repo_root,
-                            crew_id=crew_id,
-                            verification_commands=args.verification_command,
-                            max_rounds=args.max_rounds,
-                            poll_interval_seconds=args.poll_interval,
-                        ),
-                        "spawn_policy": "dynamic",
-                    },
-                    ensure_ascii=False,
-                )
-            )
-            return 0
+        runner = build_v4_crew_runner(repo_root, controller, poll_timeout=args.poll_interval, poll_retries=args.poll_retries)
         print(
             json.dumps(
                 runner.supervise(
@@ -1014,7 +975,7 @@ def handle_crew_command(args) -> int:
                     verification_commands=args.verification_command,
                     max_rounds=args.max_rounds,
                     poll_interval_seconds=args.poll_interval,
-                    **({"dynamic": True} if not args.legacy_loop and args.dynamic else {}),
+                    **({"dynamic": True} if args.dynamic else {}),
                 ),
                 ensure_ascii=False,
             )

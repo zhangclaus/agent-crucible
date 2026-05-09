@@ -1003,19 +1003,6 @@ class FakeCrewController:
         return {"active_sessions": ["crew-cli-worker"], "pruned_sessions": ["crew-worker-old"]}
 
 
-class FakeCrewSupervisorLoop:
-    def __init__(self):
-        self.calls = []
-
-    def supervise(self, **kwargs):
-        self.calls.append({"method": "supervise", **kwargs})
-        return {"crew_id": kwargs["crew_id"], "status": "ready_for_codex_accept"}
-
-    def run(self, **kwargs):
-        self.calls.append({"method": "run", **kwargs})
-        return {"crew_id": "crew-cli", "status": "ready_for_codex_accept"}
-
-
 class FakeV4MergeTransaction:
     def __init__(self, response=None):
         self.response = response or {"crew_id": "crew-cli", "status": "accepted"}
@@ -1402,59 +1389,6 @@ def test_main_crew_supervise_and_run_route_to_v4_crew_runner_by_default(
             "seed_contract": None,
         },
     ]
-
-
-def test_main_crew_supervise_and_run_can_use_legacy_v3_loop(tmp_path: Path, monkeypatch):
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    fake_controller = FakeCrewController()
-    fake_loop = FakeCrewSupervisorLoop()
-    monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_controller", lambda repo_root: fake_controller)
-    monkeypatch.setattr("codex_claude_orchestrator.cli.build_crew_supervisor_loop", lambda controller: fake_loop)
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        supervise_exit = main(
-            [
-                "crew",
-                "supervise",
-                "--repo",
-                str(repo_root),
-                "--crew",
-                "crew-cli",
-                "--verification-command",
-                "pytest -q",
-                "--poll-interval",
-                "0",
-                "--legacy-loop",
-            ]
-        )
-    supervise_payload = json.loads(stdout.getvalue())
-
-    stdout = StringIO()
-    with redirect_stdout(stdout):
-        run_exit = main(
-            [
-                "crew",
-                "run",
-                "--repo",
-                str(repo_root),
-                "--goal",
-                "Build V3 MVP",
-                "--verification-command",
-                "pytest -q",
-                "--poll-interval",
-                "0",
-                "--legacy-loop",
-            ]
-        )
-    run_payload = json.loads(stdout.getvalue())
-
-    assert supervise_exit == 0
-    assert run_exit == 0
-    assert supervise_payload["status"] == "ready_for_codex_accept"
-    assert run_payload["crew_id"] == "crew-cli"
-    assert [call["method"] for call in fake_loop.calls] == ["supervise", "run"]
 
 
 def test_main_crew_run_defaults_to_dynamic_even_for_review_heavy_goal(tmp_path: Path, monkeypatch):
