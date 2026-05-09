@@ -379,16 +379,25 @@ class ClaudeCodeTmuxAdapter:
         return [worker.transcript_artifact] if worker and worker.transcript_artifact else []
 
     def cancel_turn(self, turn: TurnEnvelope) -> CancellationResult:
+        self._cancel.set()
         return CancellationResult(
-            cancelled=False,
-            reason="tmux Claude turn cancellation is not supported by this adapter",
+            cancelled=True,
+            reason="cancel event set — watch_turn will yield runtime.cancelled",
         )
 
     def stop_worker(self, worker_id: str) -> StopResult:
-        return StopResult(
-            stopped=False,
-            reason="worker stop is delegated to existing worker pool",
-        )
+        worker = self._workers.get(worker_id)
+        if worker is None:
+            return StopResult(stopped=False, reason=f"worker {worker_id} not found")
+        pane = worker.terminal_pane or worker_id
+        # Extract session name from pane (format: "{session}:claude.0")
+        session_name = pane.split(":")[0] if ":" in pane else pane
+        try:
+            self._native_session.stop(terminal_session=session_name)
+            self._workers.pop(worker_id, None)
+            return StopResult(stopped=True, reason="session killed")
+        except Exception as exc:
+            return StopResult(stopped=False, reason=f"stop failed: {exc}")
 
 
 def _compiled_turn_message(turn: TurnEnvelope) -> str:

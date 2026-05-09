@@ -4,7 +4,12 @@ import threading
 from pathlib import Path
 
 from codex_claude_orchestrator.v4.adapters.tmux_claude import ClaudeCodeTmuxAdapter
-from codex_claude_orchestrator.v4.runtime import TurnEnvelope, WorkerSpec
+from codex_claude_orchestrator.v4.runtime import (
+    CancellationResult,
+    StopResult,
+    TurnEnvelope,
+    WorkerSpec,
+)
 
 
 class FakeNativeSession:
@@ -1220,3 +1225,117 @@ def test_async_watch_turn_timeout():
     assert "runtime.poll_timeout" in types
     timeout_event = [e for e in events if e.type == "runtime.poll_timeout"][0]
     assert timeout_event.payload["timeout_seconds"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# stop_worker / cancel_turn tests (H10 / H11)
+# ---------------------------------------------------------------------------
+
+
+class TestStopWorker:
+    def test_stop_worker_kills_tmux_session(self):
+        """H10: stop_worker must actually stop the worker, not return no-op."""
+
+        class FakeSessionWithStop:
+            def __init__(self):
+                self.stopped = []
+
+            def stop(self, *, terminal_session):
+                self.stopped.append(terminal_session)
+                return {"terminal_session": terminal_session, "stopped": True}
+
+        session = FakeSessionWithStop()
+        adapter = ClaudeCodeTmuxAdapter(native_session=session)
+        spec = WorkerSpec(
+            crew_id="c1",
+            worker_id="w1",
+            runtime_type="tmux_claude",
+            contract_id="source",
+            workspace_path="/tmp/w1",
+            terminal_pane="crew-w1-abc12345:claude.0",
+            transcript_artifact="",
+            capabilities=[],
+        )
+        adapter.register_worker(spec)
+
+        result = adapter.stop_worker("w1")
+        assert result.stopped is True
+        assert "crew-w1-abc12345" in session.stopped
+
+    def test_stop_worker_unknown_worker(self):
+        """stop_worker returns stopped=False for unknown worker."""
+        session = type("S", (), {"stop": lambda self, **kw: {"stopped": True}})()
+        adapter = ClaudeCodeTmuxAdapter(native_session=session)
+        result = adapter.stop_worker("nonexistent")
+        assert result.stopped is False
+        assert "not found" in result.reason
+
+    def test_stop_worker_removes_worker_from_registry(self):
+        """After stop_worker, the worker should no longer be registered."""
+
+        class FakeSessionWithStop:
+            def stop(self, *, terminal_session):
+                return {"terminal_session": terminal_session, "stopped": True}
+
+        session = FakeSessionWithStop()
+        adapter = ClaudeCodeTmuxAdapter(native_session=session)
+        adapter.register_worker(
+            WorkerSpec(
+                crew_id="c1",
+                worker_id="w1",
+                runtime_type="tmux_claude",
+                contract_id="source",
+                terminal_pane="sess:claude.0",
+            )
+        )
+
+        adapter.stop_worker("w1")
+        result = adapter.stop_worker("w1")
+        assert result.stopped is False
+        assert "not found" in result.reason
+
+    def test_stop_worker_handles_native_session_exception(self):
+        """stop_worker catches exceptions from native_session.stop and returns error."""
+
+        class ExplodingSession:
+            def stop(self, *, terminal_session):
+                raise RuntimeError("tmux not running")
+
+        session = ExplodingSession()
+        adapter = ClaudeCodeTmuxAdapter(native_session=session)
+        adapter.register_worker(
+            WorkerSpec(
+                crew_id="c1",
+                worker_id="w1",
+                runtime_type="tmux_claude",
+                contract_id="source",
+                terminal_pane="sess:claude.0",
+            )
+        )
+
+        result = adapter.stop_worker("w1")
+        assert result.stopped is False
+        assert "tmux not running" in result.reason
+
+
+class TestCancelTurn:
+    def test_cancel_turn_signals_cancel_event(self):
+        """H11: cancel_turn must set the cancel event."""
+        cancel = threading.Event()
+        session = type("S", (), {})()
+        adapter = ClaudeCodeTmuxAdapter(native_session=session, cancel_event=cancel)
+
+        turn = TurnEnvelope(
+            crew_id="c1",
+            worker_id="w1",
+            turn_id="t1",
+            round_id="r1",
+            phase="source",
+            message="go",
+            expected_marker="<<<DONE>>>",
+            required_outbox_path="",
+            contract_id="source_write",
+        )
+        result = adapter.cancel_turn(turn)
+        assert result.cancelled is True
+        assert cancel.is_set()
