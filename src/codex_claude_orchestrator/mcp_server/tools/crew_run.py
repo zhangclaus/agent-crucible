@@ -101,7 +101,7 @@ def register_run_tools(
     async def crew_job_status(job_id: str) -> list[TextContent]:
         """Poll crew job status. Returns delta (only changes) to minimize context usage."""
         try:
-            snap = job_manager.get_job_status(job_id)
+            snap = job_manager.get_status_and_mark_reported(job_id)
         except KeyError:
             return [
                 TextContent(

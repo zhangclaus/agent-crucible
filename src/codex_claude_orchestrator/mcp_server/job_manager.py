@@ -241,14 +241,6 @@ class JobManager:
             job.last_reported_round = job.current_round
             return result
 
-    def mark_job_reported(self, job_id: str) -> None:
-        """Mark a job's current state as reported (under lock)."""
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if job is not None:
-                job.last_reported_phase = job.phase
-                job.last_reported_round = job.current_round
-
     def update_job_subtasks(self, job_id: str, subtasks: list[dict[str, Any]]) -> None:
         """Update subtask status for a parallel job."""
         with self._lock:

@@ -450,8 +450,8 @@ def test_cancelled_job_stores_result(tmp_path):
     assert job["result"] is not None
 
 
-def test_mark_job_reported(tmp_path):
-    """mark_job_reported resets has_changed to False."""
+def test_get_status_and_mark_reported_resets_delta(tmp_path):
+    """get_status_and_mark_reported atomically returns snapshot and marks reported."""
     manager = JobManager()
 
     def run_with_progress(**kwargs):
@@ -472,12 +472,11 @@ def test_mark_job_reported(tmp_path):
     )
 
     time.sleep(0.1)
-    snap = manager.get_job_status(job_id)
+    snap = manager.get_status_and_mark_reported(job_id)
     # After progress, has_changed should be True (phase != last_reported)
     if snap["status"] == "running":
         assert snap["has_changed"] is True
-        manager.mark_job_reported(job_id)
-        snap2 = manager.get_job_status(job_id)
+        snap2 = manager.get_status_and_mark_reported(job_id)
         assert snap2["has_changed"] is False
 
 
