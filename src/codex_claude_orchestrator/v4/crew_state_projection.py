@@ -17,7 +17,8 @@ from codex_claude_orchestrator.v4.events import AgentEvent
 class CrewStateProjection:
     """Materializes full crew state from EventStore events.
 
-    Produces the same dict shape as CrewRecorder.read_crew().
+    Produces a superset of CrewRecorder.read_crew() shape, adding
+    challenges, verifications, and reviews fields from domain events.
     """
 
     crew: dict[str, Any] = field(default_factory=dict)
@@ -200,6 +201,7 @@ class CrewStateProjection:
                         "command": event.payload.get("command", ""),
                         "passed": True,
                         "created_at": event.created_at,
+                        **{k: v for k, v in event.payload.items() if k != "command"},
                     }
                 )
             case "verification.failed":
@@ -210,6 +212,7 @@ class CrewStateProjection:
                         "command": event.payload.get("command", ""),
                         "passed": False,
                         "created_at": event.created_at,
+                        **{k: v for k, v in event.payload.items() if k != "command"},
                     }
                 )
             case "challenge.issued":
@@ -221,6 +224,7 @@ class CrewStateProjection:
                         "category": event.payload.get("category", ""),
                         "severity": event.payload.get("severity", ""),
                         "created_at": event.created_at,
+                        **{k: v for k, v in event.payload.items() if k not in ("finding", "category", "severity")},
                     }
                 )
             case "repair.requested":
@@ -231,6 +235,7 @@ class CrewStateProjection:
                         "instruction": event.payload.get("instruction", ""),
                         "category": "repair",
                         "created_at": event.created_at,
+                        **{k: v for k, v in event.payload.items() if k != "instruction"},
                     }
                 )
             case "review.completed":
@@ -241,6 +246,7 @@ class CrewStateProjection:
                         "status": event.payload.get("status", ""),
                         "summary": event.payload.get("summary", ""),
                         "created_at": event.created_at,
+                        **{k: v for k, v in event.payload.items() if k not in ("status", "summary")},
                     }
                 )
 
@@ -251,7 +257,11 @@ class CrewStateProjection:
                 return
 
     def to_read_crew_dict(self) -> dict[str, Any]:
-        """Return dict matching CrewRecorder.read_crew() shape."""
+        """Return dict superset of CrewRecorder.read_crew() shape.
+
+        Includes additional fields (challenges, verifications, reviews)
+        not present in CrewRecorder output.
+        """
         return {
             "crew": self.crew,
             "tasks": self.tasks,
