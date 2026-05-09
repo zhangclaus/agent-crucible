@@ -57,33 +57,28 @@
 
 ## 线 2：代码精简
 
-### Phase 1 — 砍掉独立模块（低风险，可立即执行）
+### 原则
+
+**只砍没用的，不动能用的。** EventStore（SQLite）、双写模式、CrewStateProjection 都能用且有审计价值，不做改动。
+
+### Phase 1 — 砍掉没用的模块
 
 | 删除 | 代码量 | 理由 |
 |------|--------|------|
-| `v4/postgres_event_store.py` | 471 行 | 本地工具不需要 Postgres |
-| `v4/learning.py` + `learning_projection.py` + `learning_feedback.py` | 801 行 | 价值不明，增加复杂度 |
-| `crew/supervisor_loop.py` | 901 行 | 遗留代码，已被 V4 替代 |
+| `v4/postgres_event_store.py` | 471 行 | 本地工具不需要两个事件存储后端 |
+| `v4/learning.py` + `learning_projection.py` + `learning_feedback.py` | 801 行 | 学习系统没有证据它有效，增加复杂度 |
+| `crew/supervisor_loop.py` | 901 行 | 遗留 supervisor，已被 V4 crew_runner 替代 |
 | `v4/reconciler.py` | 30 行 | stub，无实现 |
+
+**不动的：**
+- `v4/event_store.py`（SQLite）— 保留，有审计和调试价值
+- `v4/domain_events.py` — 保留，EventStore 的配套
+- `v4/crew_state_projection.py` — 保留，从事件流读状态
+- 双写模式 — 能用，不重构
 
 **Phase 1 合计:** ~2,200 行删除
 
-### Phase 2 — 简化状态存储（中风险）
-
-**现状:** CrewRecorder（JSON 文件）和 EventStore（SQLite）双写。CrewRecorder 是实际状态源，EventStore 是审计日志。
-
-**目标:** CrewRecorder 作为唯一状态源。EventStore 降级为可选审计日志，不在核心路径上。
-
-| 变更 | 说明 |
-|------|------|
-| 删除双写模式 | CrewController、WorkerPool、BlackboardStore 不再往 EventStore 写 |
-| 删除 `crew_state_projection.py` | 304 行，从事件流重建状态 → 直接读 CrewRecorder |
-| EventStore 保留但可选 | 仅用于调试/审计，不在 create_job 路径上 |
-| 删除 `domain_events.py` 的 emit 调用 | 从 controller.py 和 pool.py 中移除 |
-
-**Phase 2 合计:** ~500 行删除 + 简化所有写路径
-
-### Phase 3 — 精简 MCP 工具（需要 Skill 配合）
+### Phase 2 — 精简 MCP 工具
 
 | 删除 | 代码量 | 理由 |
 |------|--------|------|
@@ -96,9 +91,9 @@
 - `crew_decision.py` 中的 crew_accept
 - `crew_lifecycle.py` 中的 crew_verify
 
-**Phase 3 合计:** ~300 行删除
+**Phase 2 合计:** ~300 行删除
 
-### Phase 4 — 精简 CLI
+### Phase 3 — 精简 CLI
 
 **保留的子命令:**
 ```
@@ -117,19 +112,18 @@ orchestrator doctor         # 检查依赖
 - ui 命令（`ui`）
 - 大部分 crew 子命令（blackboard, events, inbox, protocols, decisions, snapshot, contracts, messages, merge-plan, supervise, prune, resume-context, capabilities, worker send/observe/attach/tail）
 
-**Phase 4 合计:** ~800 行删除
+**Phase 3 合计:** ~800 行删除
 
 ### 精简总计
 
 | Phase | 删除量 | 风险 |
 |-------|--------|------|
 | Phase 1 | ~2,200 行 | 低 |
-| Phase 2 | ~500 行 | 中 |
-| Phase 3 | ~300 行 | 低 |
-| Phase 4 | ~800 行 | 低 |
-| **合计** | **~3,800 行** | |
+| Phase 2 | ~300 行 | 低 |
+| Phase 3 | ~800 行 | 低 |
+| **合计** | **~3,300 行** | |
 
-从 ~20,000 行减到 ~16,200 行（-19%）。核心路径代码量不变，但移除了大量基础设施代码。
+从 ~20,000 行减到 ~16,700 行（-17%）。只砍没用的，核心路径完全不动。
 
 ---
 
@@ -141,6 +135,7 @@ orchestrator doctor         # 检查依赖
 | worktree 隔离 | `workspace/worktree_manager.py` | 并发修改不冲突 |
 | 对抗验证循环 | `v4/crew_runner.py` + `v4/supervisor.py` | 核心价值：自动审查 |
 | PolicyGate | `v4/gates.py` | 强制安全策略 |
+| EventStore（SQLite） | `v4/event_store.py` | 审计日志 + 崩溃恢复 |
 | MCP Server | `mcp_server/` | 通用接口 |
 | 后台任务管理 | `mcp_server/job_manager.py` | 非阻塞执行 |
 
@@ -148,10 +143,11 @@ orchestrator doctor         # 检查依赖
 
 ## 不做的事情
 
-- **不重写任何模块** — 只删除和简化
+- **不重写任何模块** — 只删除，不重构
 - **不改变核心循环** — source → review → verify → challenge 保持不变
+- **不碰 EventStore** — SQLite 事件存储保留原样
+- **不碰双写模式** — 能用就不动
 - **不添加新功能** — 聚焦是做减法
-- **不影响现有测试** — 删除代码时同步删除对应测试
 
 ---
 
