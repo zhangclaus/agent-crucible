@@ -41,7 +41,7 @@ def _build_controller():
     return controller
 
 
-def _handle_shutdown(job_manager: "JobManager", server: object, loop: asyncio.AbstractEventLoop) -> None:
+def _handle_shutdown(job_manager: "JobManager", loop: asyncio.AbstractEventLoop) -> None:
     """Graceful shutdown: cancel jobs, then stop the event loop."""
     job_manager.shutdown(timeout=3.0)
     loop.call_soon(loop.stop)
@@ -58,7 +58,7 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(
-            sig, lambda: _handle_shutdown(job_manager, server, loop)
+            sig, lambda: _handle_shutdown(job_manager, loop)
         )
 
     await server.run_stdio_async()

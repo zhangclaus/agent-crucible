@@ -80,6 +80,9 @@ class JobManager:
         subtasks: list[dict[str, str]] | None = None,
     ) -> str:
         """Create a job, start background thread, return job_id."""
+        if self._shutdown_event.is_set():
+            raise RuntimeError("JobManager is shutting down, cannot create new jobs")
+
         job_id = f"job-{uuid.uuid4().hex[:8]}"
         job = Job(
             job_id=job_id,
@@ -300,20 +303,15 @@ class JobManager:
             return
         self._shutdown_event.set()
 
-        # Phase 1: signal cancellation to all running jobs
+        # Single critical section: cancel + collect threads
+        threads = []
         with self._lock:
             for job in self._jobs.values():
                 if job.status == "running":
                     job.cancel_event.set()
                     job.status = "cancelled"
-
-        # Phase 2: join all threads (outside lock to avoid deadlock)
-        threads: list[threading.Thread] = []
-        with self._lock:
-            threads = [
-                j.thread for j in self._jobs.values()
-                if j.thread is not None
-            ]
+                if job.thread is not None:
+                    threads.append(job.thread)
 
         for thread in threads:
             thread.join(timeout=timeout)
