@@ -184,7 +184,7 @@ class TestEmitWorkerClaimed:
         assert event.type == "worker.claimed"
         assert event.crew_id == "crew-1"
         assert event.worker_id == "worker-1"
-        assert event.idempotency_key == "crew-1/worker.claimed/worker-1"
+        assert event.idempotency_key.startswith("crew-1/worker.claimed/worker-1/")
         assert event.payload == {}
 
 
@@ -195,7 +195,7 @@ class TestEmitWorkerReleased:
         assert event.type == "worker.released"
         assert event.crew_id == "crew-1"
         assert event.worker_id == "worker-1"
-        assert event.idempotency_key == "crew-1/worker.released/worker-1"
+        assert event.idempotency_key.startswith("crew-1/worker.released/worker-1/")
         assert event.payload == {}
 
 
@@ -206,7 +206,7 @@ class TestEmitWorkerStopped:
         assert event.type == "worker.stopped"
         assert event.crew_id == "crew-1"
         assert event.worker_id == "worker-1"
-        assert event.idempotency_key == "crew-1/worker.stopped/worker-1"
+        assert event.idempotency_key.startswith("crew-1/worker.stopped/worker-1/")
         assert event.payload == {}
 
 
@@ -365,9 +365,9 @@ class TestIdempotencyKeyConventions:
 
     def test_worker_events_include_worker_id(self, emitter: DomainEventEmitter) -> None:
         assert emitter.emit_worker_spawned("c1", "w1").idempotency_key == "c1/worker.spawned/w1"
-        assert emitter.emit_worker_claimed("c1", "w1").idempotency_key == "c1/worker.claimed/w1"
-        assert emitter.emit_worker_released("c1", "w1").idempotency_key == "c1/worker.released/w1"
-        assert emitter.emit_worker_stopped("c1", "w1").idempotency_key == "c1/worker.stopped/w1"
+        assert emitter.emit_worker_claimed("c1", "w1").idempotency_key.startswith("c1/worker.claimed/w1/")
+        assert emitter.emit_worker_released("c1", "w1").idempotency_key.startswith("c1/worker.released/w1/")
+        assert emitter.emit_worker_stopped("c1", "w1").idempotency_key.startswith("c1/worker.stopped/w1/")
 
     def test_contract_events_include_contract_id(self, emitter: DomainEventEmitter) -> None:
         key = emitter.emit_worker_contract_recorded("c1", "ct1").idempotency_key
@@ -450,3 +450,44 @@ class TestSummaryHash:
         result = _summary_hash("test input")
         assert len(result) == 12
         int(result, 16)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# C1: Verification idempotency key collision
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationIdempotencyKeys:
+    def test_passed_and_failed_have_different_keys(self, emitter, store):
+        """C1: verification.passed and verification.failed must not share keys."""
+        emitter.emit_verification_passed("c1", "w1", "pytest", round_id="r1")
+        emitter.emit_verification_failed("c1", "w1", "pytest", round_id="r1")
+        keys = [e.idempotency_key for e in store._events]
+        assert keys[0] != keys[1], "passed/failed keys must differ"
+        assert "verification.passed" in keys[0]
+        assert "verification.failed" in keys[1]
+
+    def test_passed_then_failed_both_stored(self, emitter, store):
+        """C1: Both events must be stored, not deduplicated."""
+        emitter.emit_verification_passed("c1", "w1", "pytest", round_id="r1")
+        emitter.emit_verification_failed("c1", "w1", "pytest", round_id="r1")
+        assert len(store._events) == 2
+        assert store._events[0].type == "verification.passed"
+        assert store._events[1].type == "verification.failed"
+
+
+# ---------------------------------------------------------------------------
+# H5: Worker lifecycle idempotency key collision
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerLifecycleIdempotencyKeys:
+    def test_claimed_then_released_then_claimed_again(self, emitter, store):
+        """H5: Re-claiming after release must produce a new event, not be deduplicated."""
+        emitter.emit_worker_claimed("c1", "w1")
+        emitter.emit_worker_released("c1", "w1")
+        emitter.emit_worker_claimed("c1", "w1")
+        assert len(store._events) == 3
+        assert store._events[2].type == "worker.claimed"
+        # Keys must differ between first claim and second claim
+        assert store._events[0].idempotency_key != store._events[2].idempotency_key

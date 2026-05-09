@@ -8,6 +8,7 @@ idempotency key conventions and payload normalization.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 from typing import Any
 
@@ -36,6 +37,8 @@ class DomainEventEmitter:
 
     Fire-and-forget: this class does not handle errors — callers are responsible.
     """
+
+    _seq_counter = itertools.count()
 
     def __init__(self, events: EventStore) -> None:
         self._events = events
@@ -165,7 +168,7 @@ class DomainEventEmitter:
             type="worker.claimed",
             crew_id=crew_id,
             worker_id=worker_id,
-            idempotency_key=f"{crew_id}/worker.claimed/{worker_id}",
+            idempotency_key=f"{crew_id}/worker.claimed/{worker_id}/{next(self._seq_counter)}",
         )
 
     def emit_worker_released(
@@ -178,7 +181,7 @@ class DomainEventEmitter:
             type="worker.released",
             crew_id=crew_id,
             worker_id=worker_id,
-            idempotency_key=f"{crew_id}/worker.released/{worker_id}",
+            idempotency_key=f"{crew_id}/worker.released/{worker_id}/{next(self._seq_counter)}",
         )
 
     def emit_worker_stopped(
@@ -191,7 +194,7 @@ class DomainEventEmitter:
             type="worker.stopped",
             crew_id=crew_id,
             worker_id=worker_id,
-            idempotency_key=f"{crew_id}/worker.stopped/{worker_id}",
+            idempotency_key=f"{crew_id}/worker.stopped/{worker_id}/{next(self._seq_counter)}",
         )
 
     # -- Blackboard -------------------------------------------------------
@@ -306,7 +309,7 @@ class DomainEventEmitter:
             worker_id=worker_id,
             round_id=round_id,
             contract_id=contract_id,
-            idempotency_key=f"{crew_id}/{round_id}/{worker_id}/verification/{_summary_hash(command)}",
+            idempotency_key=f"{crew_id}/{round_id}/{worker_id}/verification.passed/{_summary_hash(command)}",
             payload=normalize(payload),
             artifact_refs=artifact_refs or [],
         )
@@ -331,7 +334,7 @@ class DomainEventEmitter:
             worker_id=worker_id,
             round_id=round_id,
             contract_id=contract_id,
-            idempotency_key=f"{crew_id}/{round_id}/{worker_id}/verification/{_summary_hash(command)}",
+            idempotency_key=f"{crew_id}/{round_id}/{worker_id}/verification.failed/{_summary_hash(command)}",
             payload=normalize(payload),
             artifact_refs=artifact_refs or [],
         )
