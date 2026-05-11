@@ -438,6 +438,66 @@ class DomainEventEmitter:
             artifact_refs=evidence_refs or [],
         )
 
+    # -- Stage lifecycle (long task) ------------------------------------
+
+    def emit_stage_planned(
+        self,
+        crew_id: str,
+        stage_id: int,
+        goal: str,
+        acceptance_criteria: list[str],
+        sub_tasks: list[dict[str, Any]],
+        dependencies: list[int],
+        contract: dict[str, Any] | None = None,
+        **extra: Any,
+    ) -> AgentEvent:
+        payload: dict[str, Any] = {
+            "stage_id": stage_id,
+            "goal": goal,
+            "acceptance_criteria": acceptance_criteria,
+            "sub_tasks": sub_tasks,
+            "dependencies": dependencies,
+        }
+        if contract:
+            payload["contract"] = contract
+        payload.update(extra)
+        return self._events.append(
+            stream_id=crew_id,
+            type="stage.planned",
+            crew_id=crew_id,
+            idempotency_key=f"{crew_id}/stage.planned/{stage_id}",
+            payload=normalize(payload),
+        )
+
+    def emit_stage_completed(
+        self,
+        crew_id: str,
+        stage_id: int,
+        summary: str,
+        verdict: str = "",
+        action: str = "",
+        changed_files: list[str] | None = None,
+        **extra: Any,
+    ) -> AgentEvent:
+        payload: dict[str, Any] = {
+            "stage_id": stage_id,
+            "summary": summary,
+        }
+        if verdict:
+            payload["verdict"] = verdict
+        if action:
+            payload["action"] = action
+        if changed_files:
+            payload["changed_files"] = changed_files
+        payload.update(extra)
+        return self._events.append(
+            stream_id=crew_id,
+            type="stage.completed",
+            crew_id=crew_id,
+            idempotency_key=f"{crew_id}/stage.completed/{stage_id}",
+            payload=normalize(payload),
+        )
+
     # -- Pitfalls ---------------------------------------------------------
 
     def emit_pitfall_recorded(
