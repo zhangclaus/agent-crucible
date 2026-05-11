@@ -354,13 +354,14 @@ class LongTaskSupervisor:
                 )
 
     # ------------------------------------------------------------------
-    # Sub-agent spawning (placeholder for Task 6)
+    # Sub-agent spawning
     # ------------------------------------------------------------------
 
     def _spawn_sub_agent(self, prompt: str, tools: list[str] | None = None) -> str:
         """Spawn a lightweight sub-agent and return its output.
 
         Uses supervisor.run_worker_turn for a one-shot execution.
+        Cleans up the worker's worktree in a finally block.
         """
         from codex_claude_orchestrator.crew.models import (
             AuthorityLevel,
@@ -388,21 +389,27 @@ class LongTaskSupervisor:
             allow_dirty_base=True,
         )
 
-        result = self.supervisor.run_worker_turn(
-            crew_id=self._crew_id,
-            goal=prompt[:200],
-            worker_id=worker_id,
-            round_id=round_id,
-            phase="sub-agent",
-            contract_id=contract_id,
-            message=prompt,
-            expected_marker="<<<DONE",
-        )
+        try:
+            result = self.supervisor.run_worker_turn(
+                crew_id=self._crew_id,
+                goal=prompt[:200],
+                worker_id=worker_id,
+                round_id=round_id,
+                phase="sub-agent",
+                contract_id=contract_id,
+                message=prompt,
+                expected_marker="<<<DONE",
+            )
 
-        if result.get("status") == "error":
-            raise RuntimeError(f"Sub-agent failed: {result.get('reason', 'unknown')}")
+            if result.get("status") == "error":
+                raise RuntimeError(f"Sub-agent failed: {result.get('reason', 'unknown')}")
 
-        return result.get("output", "")
+            return result.get("output", "")
+        finally:
+            try:
+                self.controller.release_worker(self._crew_id, worker_id)
+            except Exception:
+                logging.debug("sub-agent cleanup failed for %s", worker_id, exc_info=True)
 
     # ------------------------------------------------------------------
     # Main loop

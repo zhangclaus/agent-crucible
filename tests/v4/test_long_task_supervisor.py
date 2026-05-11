@@ -611,3 +611,41 @@ class TestRunSubTasksWriteScope:
         contract = captured_contracts[0]
         assert contract is not None
         assert contract.write_scope == write_scope
+
+
+class TestSpawnSubAgentCleanup:
+    def test_cleans_up_worktree_on_success(self):
+        """_spawn_sub_agent should clean up the worker's worktree after completion."""
+        supervisor = LongTaskSupervisor.__new__(LongTaskSupervisor)
+        supervisor.repo_root = Path("/tmp/test")
+        supervisor._crew_id = "c1"
+        supervisor.controller = MagicMock()
+        supervisor.controller.ensure_worker.return_value = {"worker_id": "sub-agent-abc123"}
+        supervisor.supervisor = MagicMock()
+        supervisor.supervisor.run_worker_turn.return_value = {
+            "status": "completed",
+            "output": "result",
+        }
+
+        supervisor._spawn_sub_agent("test prompt")
+
+        # verify_worker should have been called for cleanup
+        supervisor.controller.release_worker.assert_called_once()
+
+    def test_cleans_up_worktree_on_error(self):
+        """_spawn_sub_agent should clean up even if run_worker_turn fails."""
+        supervisor = LongTaskSupervisor.__new__(LongTaskSupervisor)
+        supervisor.repo_root = Path("/tmp/test")
+        supervisor._crew_id = "c1"
+        supervisor.controller = MagicMock()
+        supervisor.controller.ensure_worker.return_value = {"worker_id": "sub-agent-abc123"}
+        supervisor.supervisor = MagicMock()
+        supervisor.supervisor.run_worker_turn.return_value = {
+            "status": "error",
+            "reason": "crashed",
+        }
+
+        with pytest.raises(RuntimeError, match="Sub-agent failed"):
+            supervisor._spawn_sub_agent("test prompt")
+
+        supervisor.controller.release_worker.assert_called_once()
