@@ -82,6 +82,32 @@ def _make_event_store(*, events_by_turn: dict[str, list[dict]] | None = None):
 # ---------------------------------------------------------------------------
 
 
+import logging
+
+
+class TestParallelSupervisorLogging:
+    def test_progress_callback_failure_is_logged(self, caplog):
+        """Progress callback failures should be logged, not silently swallowed."""
+        import inspect
+        from codex_claude_orchestrator.v4.parallel_supervisor import ParallelSupervisor
+
+        source = inspect.getsource(ParallelSupervisor)
+        # Check that no bare 'except Exception: pass' without logging exists
+        lines = source.splitlines()
+        bare_passes = []
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == "pass" and i > 0:
+                prev = lines[i - 1].strip()
+                if prev.startswith("except"):
+                    bare_passes.append(i + 1)
+
+        assert len(bare_passes) == 0, (
+            f"Found bare 'except Exception: pass' at lines {bare_passes}. "
+            "Each should log instead of silently swallowing."
+        )
+
+
 @pytest.mark.asyncio
 async def test_parallel_watch_and_review_all_pass(tmp_path: Path) -> None:
     """All workers complete and pass unit review."""

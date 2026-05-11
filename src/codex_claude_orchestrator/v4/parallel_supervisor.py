@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -61,7 +62,7 @@ class ParallelSupervisor:
                 try:
                     progress_callback("watching", round_index, max_rounds)
                 except Exception:
-                    pass
+                    logging.debug("progress_callback failed", exc_info=True)
 
             round_id = f"parallel-round-{round_index}"
 
@@ -121,7 +122,7 @@ class ParallelSupervisor:
                 try:
                     progress_callback("integration", round_index, max_rounds)
                 except Exception:
-                    pass
+                    logging.debug("progress_callback failed", exc_info=True)
 
             integration = self._run_integration_review(
                 subtasks=subtasks,
@@ -405,6 +406,7 @@ class ParallelSupervisor:
                     if changes:
                         all_changes.append(changes)
                 except Exception:
+                    logging.debug("failed to collect changes for worker %s", st.worker_id, exc_info=True)
                     continue
 
         # Detect conflicts
@@ -497,4 +499,4 @@ class ParallelSupervisor:
         try:
             self._controller.release_worker(crew_id, worker_id)
         except Exception:
-            pass  # cleanup must not crash the supervision loop
+            logging.debug("worker cleanup failed for %s", worker_id, exc_info=True)
