@@ -1,8 +1,49 @@
-.venv/
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Testing
 .pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+
+# Databases
+*.sqlite3
+*.sqlite
+*.db
+
+# Logs
+*.log
+
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+
+# Project-specific
 .orchestrator/
 .worktrees/
-.idea/
 .superpowers/
-*.egg-info/

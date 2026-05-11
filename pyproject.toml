@@ -5,9 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codex-claude-orchestrator"
 version = "0.1.0"
-description = "Local Codex-first orchestrator for Claude Code workers"
+description = "Local multi-agent orchestration system for Claude Code workers with adversarial verification"
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.11"
+keywords = ["claude", "multi-agent", "orchestration", "mcp", "code-generation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = ["mcp>=1.0.0"]
+
+[project.urls]
+Repository = "https://github.com/zhangclaus/codex-claude-orchestrator"
+Issues = "https://github.com/zhangclaus/codex-claude-orchestrator/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.2"]
