@@ -39,7 +39,7 @@ The key insight: **the Reviewer is adversarial**. It doesn't just check "do test
 ### Install
 
 ```bash
-pip install adversarial-code-review
+pip install git+https://github.com/zhangclaus/adversarial-code-review.git
 
 # Verify prerequisites
 acr doctor

@@ -8,13 +8,13 @@ from codex_claude_orchestrator.mcp_server.server import create_server
 def test_server_has_all_tools():
     server = create_server()
     # create_server without controller still returns a valid server
-    assert server.name == "crew-orchestrator"
+    assert server.name == "adversarial-code-review"
 
 
 def test_server_registers_lifecycle_tools_when_controller_given():
     controller = MagicMock()
     server = create_server(controller=controller)
-    assert server.name == "crew-orchestrator"
+    assert server.name == "adversarial-code-review"
 
 
 def test_server_registers_all_tool_modules():

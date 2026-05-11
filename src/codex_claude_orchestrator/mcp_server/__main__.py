@@ -47,7 +47,7 @@ def _handle_shutdown(job_manager: "JobManager", loop: asyncio.AbstractEventLoop)
     loop.call_soon(loop.stop)
 
 
-async def main() -> None:
+async def _async_main() -> None:
     from codex_claude_orchestrator.mcp_server.job_manager import JobManager
     from codex_claude_orchestrator.mcp_server.server import create_server
 
@@ -64,5 +64,9 @@ async def main() -> None:
     await server.run_stdio_async()
 
 
+def main() -> None:
+    asyncio.run(_async_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
