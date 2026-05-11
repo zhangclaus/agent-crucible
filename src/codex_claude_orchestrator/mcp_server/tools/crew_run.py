@@ -42,6 +42,10 @@ def _build_terminal_response(snap: dict) -> dict:
         base["error"] = snap["error"]
     if snap.get("subtasks"):
         base["subtasks"] = snap["subtasks"]
+    # Include failure_context when max_rounds_exhausted with verification failures
+    failure_context = snap.get("failure_context")
+    if failure_context:
+        base["failure_details"] = failure_context
     return base
 
 
@@ -126,7 +130,8 @@ def register_run_tools(
                             f"2. 如果返回 status='running'，记录 phase/round，按返回的 poll_after_seconds 等待后重试\n"
                             f"3. 如果返回 status='unchanged'，按返回的 elapsed 推算等待时间后重试\n"
                             f"4. 如果返回 status='done'，从 result 中取 crew_id 字段，调用 crew_accept(crew_id) 然后报告最终结果\n"
-                            f"5. 如果返回 status='failed' 或 'cancelled'，报告错误\n\n"
+                            f"5. 如果返回 status='failed' 或 'cancelled'，报告错误\n"
+                            f"6. 如果返回 status='done' 但 result.status='max_rounds_exhausted'，检查 failure_details 字段获取失败原因（last_verification.output），报告给主会话以便决定是否修复后重试\n\n"
                             f"注意：你拥有独立上下文，轮询结果不会污染主会话。持续轮询直到终态。"
                         ),
                     },

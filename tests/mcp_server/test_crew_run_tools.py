@@ -41,6 +41,52 @@ class TestBuildTerminalResponse:
         assert result["error"] == "worker crashed"
 
 
+    def test_failure_context_included_as_failure_details(self):
+        """When snap has failure_context, response should include failure_details."""
+        from codex_claude_orchestrator.mcp_server.tools.crew_run import _build_terminal_response
+
+        snap = {
+            "job_id": "j3",
+            "status": "done",
+            "elapsed_seconds": 120,
+            "current_round": 3,
+            "result": {"status": "max_rounds_exhausted", "crew_id": "c1"},
+            "error": None,
+            "subtasks": None,
+            "failure_context": {
+                "last_verification": {
+                    "command": "pytest",
+                    "output": "3 tests failed",
+                    "returncode": 1,
+                },
+                "affected_files": ["src/app.py"],
+                "rounds_attempted": 3,
+                "last_phase": "verifying",
+            },
+        }
+        result = _build_terminal_response(snap)
+        assert "failure_details" in result
+        assert result["failure_details"]["last_verification"]["output"] == "3 tests failed"
+        assert result["failure_details"]["affected_files"] == ["src/app.py"]
+        assert result["failure_details"]["rounds_attempted"] == 3
+
+    def test_no_failure_details_when_no_failure_context(self):
+        """When snap has no failure_context, response should not include failure_details."""
+        from codex_claude_orchestrator.mcp_server.tools.crew_run import _build_terminal_response
+
+        snap = {
+            "job_id": "j4",
+            "status": "done",
+            "elapsed_seconds": 10,
+            "current_round": 1,
+            "result": {"status": "ready_for_codex_accept"},
+            "error": None,
+            "subtasks": None,
+        }
+        result = _build_terminal_response(snap)
+        assert "failure_details" not in result
+
+
 class TestRunnerCacheEviction:
     def test_cache_does_not_grow_beyond_limit(self):
         """_runner_cache should evict oldest entries when full."""

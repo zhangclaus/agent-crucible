@@ -603,3 +603,106 @@ class TestGracefulShutdown:
         manager.shutdown(timeout=2.0)
         # Second call should not raise
         manager.shutdown(timeout=2.0)
+
+
+class TestFailureContextPropagation:
+    def test_failure_context_extracted_from_result(self, tmp_path):
+        """When runner returns failure_context, Job stores it."""
+        manager = JobManager()
+        failure_ctx = {
+            "last_verification": {
+                "command": "pytest",
+                "output": "3 tests failed",
+                "returncode": 1,
+            },
+            "affected_files": ["src/app.py"],
+            "rounds_attempted": 3,
+            "last_phase": "verifying",
+        }
+        runner = FakeRunner(result={
+            "status": "max_rounds_exhausted",
+            "crew_id": "c1",
+            "failure_context": failure_ctx,
+        })
+
+        job_id = manager.create_job(
+            runner=runner,
+            repo_root=tmp_path,
+            goal="test",
+            verification_commands=["pytest"],
+            max_rounds=3,
+        )
+
+        time.sleep(0.2)
+        job = manager.get_job(job_id)
+        assert job["failure_context"] is not None
+        assert job["failure_context"]["last_verification"]["output"] == "3 tests failed"
+        assert job["failure_context"]["affected_files"] == ["src/app.py"]
+
+    def test_failure_context_none_when_no_failures(self, tmp_path):
+        """When runner returns no failure_context, Job.failure_context is None."""
+        manager = JobManager()
+        runner = FakeRunner(result={"status": "ready_for_codex_accept", "crew_id": "c1"})
+
+        job_id = manager.create_job(
+            runner=runner,
+            repo_root=tmp_path,
+            goal="test",
+            verification_commands=["pytest"],
+        )
+
+        time.sleep(0.2)
+        job = manager.get_job(job_id)
+        assert job["failure_context"] is None
+
+    def test_failure_context_in_get_job_status(self, tmp_path):
+        """get_job_status includes failure_context in snapshot."""
+        manager = JobManager()
+        failure_ctx = {
+            "last_verification": {"command": "pytest", "output": "fail", "returncode": 1},
+            "affected_files": [],
+            "rounds_attempted": 2,
+            "last_phase": "verifying",
+        }
+        runner = FakeRunner(result={
+            "status": "max_rounds_exhausted",
+            "failure_context": failure_ctx,
+        })
+
+        job_id = manager.create_job(
+            runner=runner,
+            repo_root=tmp_path,
+            goal="test",
+            verification_commands=["pytest"],
+        )
+
+        time.sleep(0.2)
+        snap = manager.get_job_status(job_id)
+        assert snap["failure_context"] is not None
+        assert snap["failure_context"]["rounds_attempted"] == 2
+
+    def test_failure_context_in_get_status_and_mark_reported(self, tmp_path):
+        """get_status_and_mark_reported includes failure_context in snapshot."""
+        manager = JobManager()
+        failure_ctx = {
+            "last_verification": {"command": "pytest", "output": "fail", "returncode": 1},
+            "affected_files": ["src/x.py"],
+            "rounds_attempted": 1,
+            "last_phase": "verifying",
+        }
+        runner = FakeRunner(result={
+            "status": "max_rounds_exhausted",
+            "failure_context": failure_ctx,
+        })
+
+        job_id = manager.create_job(
+            runner=runner,
+            repo_root=tmp_path,
+            goal="test",
+            verification_commands=["pytest"],
+        )
+
+        time.sleep(0.2)
+        snap = manager.get_status_and_mark_reported(job_id)
+        assert snap["failure_context"] is not None
+        assert snap["failure_context"]["affected_files"] == ["src/x.py"]

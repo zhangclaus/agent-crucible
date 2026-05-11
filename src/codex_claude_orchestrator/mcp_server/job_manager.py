@@ -24,6 +24,7 @@ class Job:
     thread: threading.Thread | None = None
     completed_at: float | None = None
     subtasks: list[dict[str, Any]] | None = None  # parallel mode subtask tracking
+    failure_context: dict[str, Any] | None = None  # failure details from max_rounds_exhausted
     _start_time: float = field(default_factory=time.monotonic, repr=False)
 
     # Delta tracking
@@ -141,6 +142,9 @@ class JobManager:
                     if job.status != "cancelled":
                         job.status = "done"
                     job.result = result  # always store, even if cancelled
+                    # Extract failure_context if present (from max_rounds_exhausted)
+                    if isinstance(result, dict) and result.get("failure_context"):
+                        job.failure_context = result["failure_context"]
                     job.phase = "idle"
             except Exception as exc:
                 with self._lock:
@@ -191,6 +195,7 @@ class JobManager:
                 "cancel_event": job.cancel_event,
                 "completed_at": job.completed_at,
                 "subtasks": job.subtasks,
+                "failure_context": job.failure_context,
             }
 
     def get_job_status(self, job_id: str) -> dict[str, Any]:
@@ -219,6 +224,7 @@ class JobManager:
                     or job.current_round != job.last_reported_round
                 ),
                 "subtasks": job.subtasks,
+                "failure_context": job.failure_context,
             }
 
     def get_status_and_mark_reported(self, job_id: str) -> dict[str, Any]:
@@ -243,6 +249,7 @@ class JobManager:
                     or job.current_round != job.last_reported_round
                 ),
                 "subtasks": job.subtasks,
+                "failure_context": job.failure_context,
             }
             # Atomically mark as reported
             job.last_reported_phase = job.phase
