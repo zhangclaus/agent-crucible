@@ -15,6 +15,23 @@ from codex_claude_orchestrator.mcp_server.job_manager import JobManager, _next_p
 _runner_cache: dict[str, object] = {}
 
 
+def _build_terminal_response(snap: dict) -> dict:
+    """Build response dict for terminal job states (done/failed/cancelled)."""
+    base = {
+        "job_id": snap["job_id"],
+        "status": snap["status"],
+        "elapsed": round(snap["elapsed_seconds"]),
+        "rounds": snap["current_round"],
+    }
+    if snap["status"] == "done" and snap["result"] is not None:
+        base["result"] = snap["result"]
+    if snap["status"] == "failed" and snap.get("error"):
+        base["error"] = snap["error"]
+    if snap.get("subtasks"):
+        base["subtasks"] = snap["subtasks"]
+    return base
+
+
 def register_run_tools(
     server: FastMCP,
     controller,
@@ -119,22 +136,10 @@ def register_run_tools(
 
         # Terminal states: return full result
         if status in ("done", "failed", "cancelled"):
-            base = {
-                "job_id": snap["job_id"],
-                "status": status,
-                "elapsed": elapsed,
-                "rounds": snap["current_round"],
-            }
-            if status == "done" and snap["result"] is not None:
-                base["result"] = snap["result"]
-            if status == "failed" and snap["error"]:
-                base["error"] = snap["error"]
-            if snap.get("subtasks"):
-                base["subtasks"] = snap["subtasks"]
             return [
                 TextContent(
                     type="text",
-                    text=json.dumps(base, ensure_ascii=False),
+                    text=json.dumps(_build_terminal_response(snap), ensure_ascii=False),
                 )
             ]
 
@@ -160,22 +165,10 @@ def register_run_tools(
 
         # Re-check terminal after atomic mark (background thread may have completed)
         if status in ("done", "failed", "cancelled"):
-            base = {
-                "job_id": snap["job_id"],
-                "status": status,
-                "elapsed": elapsed,
-                "rounds": snap["current_round"],
-            }
-            if status == "done" and snap["result"] is not None:
-                base["result"] = snap["result"]
-            if status == "failed" and snap["error"]:
-                base["error"] = snap["error"]
-            if snap.get("subtasks"):
-                base["subtasks"] = snap["subtasks"]
             return [
                 TextContent(
                     type="text",
-                    text=json.dumps(base, ensure_ascii=False),
+                    text=json.dumps(_build_terminal_response(snap), ensure_ascii=False),
                 )
             ]
 
