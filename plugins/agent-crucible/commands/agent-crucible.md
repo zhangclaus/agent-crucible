@@ -31,20 +31,12 @@ Use this command to perform adversarial code review with multiple agents.
 
 The following tools are available for code review:
 
-### Core Tools
-- `crew_run(repo, goal, supervisor_mode)` — Start adversarial review
+### Core Tools (Default Mode)
+- `crew_run(repo, goal)` — Start adversarial review (default mode)
 - `crew_job_status(job_id)` — Poll job status
 - `crew_cancel(job_id)` — Cancel a running job
 - `crew_verify(crew_id, command)` — Run verification command
 - `crew_accept(crew_id, summary)` — Accept and finalize results
-
-### Supervisor Mode Tools (when supervisor_mode=True)
-- `crew_spawn(repo, crew_id, label, mission)` — Spawn worker agent
-- `crew_observe(repo, crew_id, worker_id)` — Observe worker output
-- `crew_changes(crew_id)` — View changed files
-- `crew_diff(crew_id, file)` — View diff for specific file
-- `crew_stop_worker(repo, crew_id, worker_id)` — Stop specific worker
-- `crew_challenge(crew_id, summary, task_id)` — Challenge worker with issues
 
 ## Worker Templates
 
@@ -60,21 +52,17 @@ The following tools are available for code review:
 
 ## Examples
 
-### Basic Review
+### Basic Review (Recommended)
 ```
 crew_run(repo="/path/to/project", goal="Add user authentication")
 ```
 
-### Supervisor Mode (Direct Control)
+### With Verification Command
 ```
-crew_run(repo="/path/to/project", goal="Add user auth", supervisor_mode=True)
+crew_run(repo="/path/to/project", goal="Add user authentication", verification_commands=["pytest"])
 ```
 
-Then orchestrate manually:
-```
-crew_spawn(repo="/path", crew_id="crew-1", label="backend-developer", mission="Implement auth API")
-crew_observe(repo="/path", crew_id="crew-1", worker_id="worker-1")
-crew_challenge(crew_id="crew-1", summary="Missing input validation")
-crew_verify(crew_id="crew-1", command="pytest")
-crew_accept(crew_id="crew-1", summary="All tests pass")
-```
+## Notes
+
+- **Default mode** uses V4CrewRunner Python loop (stable, recommended)
+- **Supervisor mode** (`supervisor_mode=True`) is experimental and not recommended for production use
