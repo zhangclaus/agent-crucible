@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from codex_claude_orchestrator.mcp_server.tools.crew_lifecycle import register_lifecycle_tools
@@ -21,7 +22,8 @@ def test_crew_verify_registered():
     register_lifecycle_tools(server, controller)
     assert "crew_verify" in server.tools
     assert "crew_spawn" in server.tools
-    assert len(server.tools) == 2
+    assert "crew_stop_worker" in server.tools
+    assert len(server.tools) == 3
 
 
 def test_crew_verify_success():
@@ -117,3 +119,62 @@ class TestCrewSpawn:
 
         response = json.loads(result[0].text)
         assert response["worker_id"] == "w2"
+
+
+class TestCrewStopWorker:
+    def test_crew_stop_worker(self):
+        """crew_stop_worker should stop a specific worker."""
+        server = FakeServer()
+        controller = MagicMock()
+        controller.stop_worker.return_value = {"stopped": True, "worker_id": "w1"}
+        register_lifecycle_tools(server, controller)
+
+        import asyncio
+        result = asyncio.run(server.tools["crew_stop_worker"](
+            repo="/tmp/test",
+            crew_id="crew-1",
+            worker_id="w1",
+        ))
+
+        response = json.loads(result[0].text)
+        assert response["stopped"] is True
+        controller.stop_worker.assert_called_once_with(
+            repo_root=Path("/tmp/test"),
+            crew_id="crew-1",
+            worker_id="w1",
+        )
+
+    def test_crew_stop_worker_not_found(self):
+        """crew_stop_worker should return error when crew not found."""
+        server = FakeServer()
+        controller = MagicMock()
+        controller.stop_worker.side_effect = FileNotFoundError("crew not found: crew-1")
+        register_lifecycle_tools(server, controller)
+
+        import asyncio
+        result = asyncio.run(server.tools["crew_stop_worker"](
+            repo="/tmp/test",
+            crew_id="crew-1",
+            worker_id="w1",
+        ))
+
+        response = json.loads(result[0].text)
+        assert "error" in response
+        assert "crew not found" in response["error"]
+
+    def test_crew_stop_worker_value_error(self):
+        """crew_stop_worker should return error on ValueError."""
+        server = FakeServer()
+        controller = MagicMock()
+        controller.stop_worker.side_effect = ValueError("invalid worker")
+        register_lifecycle_tools(server, controller)
+
+        import asyncio
+        result = asyncio.run(server.tools["crew_stop_worker"](
+            repo="/tmp/test",
+            crew_id="crew-1",
+            worker_id="w1",
+        ))
+
+        response = json.loads(result[0].text)
+        assert "error" in response

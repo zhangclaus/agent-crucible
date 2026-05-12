@@ -133,3 +133,24 @@ def register_lifecycle_tools(server: Server, controller) -> None:
             return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
         except Exception as exc:
             return [TextContent(type="text", text=json.dumps({"error": f"internal: {exc}"}, ensure_ascii=False))]
+
+    @server.tool("crew_stop_worker")
+    async def crew_stop_worker(
+        repo: str,
+        crew_id: str,
+        worker_id: str,
+    ) -> list[TextContent]:
+        """Stop a specific worker agent."""
+        try:
+            result = controller.stop_worker(
+                repo_root=Path(repo),
+                crew_id=crew_id,
+                worker_id=worker_id,
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+        except FileNotFoundError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except ValueError as exc:
+            return [TextContent(type="text", text=json.dumps({"error": str(exc)}, ensure_ascii=False))]
+        except Exception as exc:
+            return [TextContent(type="text", text=json.dumps({"error": f"internal: {exc}"}, ensure_ascii=False))]
