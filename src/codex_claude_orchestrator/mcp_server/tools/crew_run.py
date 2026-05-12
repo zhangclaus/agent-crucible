@@ -67,6 +67,7 @@ def register_run_tools(
         max_workers: int = 3,
         subtasks: list[dict[str, str]] | None = None,
         long_task: bool = False,
+        supervisor_mode: bool = False,
     ) -> list[TextContent]:
         """Start a crew job in the background (non-blocking).
 
@@ -90,6 +91,10 @@ def register_run_tools(
                 single-subtask split.
             long_task: Enable long task mode with multi-stage execution
                 (default False). When True, delegates to LongTaskSupervisor.
+            supervisor_mode: Enable AI Supervisor Agent mode (default False).
+                When True, starts a Claude CLI agent that directly controls
+                workers via MCP tools (crew_spawn, crew_observe, crew_challenge, etc.)
+                instead of using the V4CrewRunner Python loop.
         """
         # Clamp resource limits
         max_workers = min(max(int(max_workers), 1), 5)
@@ -117,6 +122,7 @@ def register_run_tools(
             max_workers=max_workers,
             subtasks=subtasks,
             long_task=long_task,
+            supervisor_mode=supervisor_mode,
         )
 
         return [

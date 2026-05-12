@@ -87,6 +87,40 @@ class TestBuildTerminalResponse:
         assert "failure_details" not in result
 
 
+class TestSupervisorMode:
+    def test_crew_run_supervisor_mode_accepted(self):
+        """crew_run with supervisor_mode=True should be accepted."""
+        from unittest.mock import MagicMock
+        from codex_claude_orchestrator.mcp_server.tools.crew_run import register_run_tools
+
+        server = MagicMock()
+        captured_tools = {}
+        def capture_tool(name):
+            def decorator(func):
+                captured_tools[name] = func
+                return func
+            return decorator
+        server.tool = capture_tool
+
+        controller = MagicMock()
+        job_manager = MagicMock()
+        job_manager.create_job.return_value = "job-test-123"
+
+        register_run_tools(server, controller, job_manager)
+
+        import asyncio
+        result = asyncio.run(captured_tools["crew_run"](
+            repo="/tmp/test",
+            goal="test goal",
+            supervisor_mode=True,
+        ))
+
+        import json
+        response = json.loads(result[0].text)
+        assert response["job_id"] == "job-test-123"
+        assert response["status"] == "running"
+
+
 class TestRunnerCacheEviction:
     def test_cache_does_not_grow_beyond_limit(self):
         """_runner_cache should evict oldest entries when full."""
