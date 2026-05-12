@@ -83,6 +83,7 @@ class JobManager:
         max_workers: int = 3,
         subtasks: list[dict[str, str]] | None = None,
         long_task: bool = False,
+        supervisor_mode: bool = False,
     ) -> str:
         """Create a job, start background thread, return job_id."""
         if self._shutdown_event.is_set():
@@ -100,6 +101,17 @@ class JobManager:
 
         def _run() -> None:
             try:
+                if supervisor_mode:
+                    _start_supervisor_agent(
+                        repo_root=repo_root,
+                        goal=goal,
+                        crew_id=crew_id or f"crew-{job_id}",
+                        verification_commands=verification_commands or [],
+                        max_rounds=max_rounds,
+                        job_id=job_id,
+                        job_manager=self,
+                    )
+                    return
                 if parallel:
                     import asyncio
                     if subtasks:
@@ -345,3 +357,48 @@ def _split_goal_into_subtasks(goal: str) -> list:
             scope=["src/", "tests/"],
         )
     ]
+
+
+def _start_supervisor_agent(
+    *,
+    repo_root: Path,
+    goal: str,
+    crew_id: str,
+    verification_commands: list[str],
+    max_rounds: int,
+    job_id: str,
+    job_manager: "JobManager",
+) -> None:
+    """Start a Claude CLI supervisor agent that directly controls workers via MCP tools."""
+    import shutil
+    import subprocess
+
+    claude = shutil.which("claude") or "claude"
+    tmux = shutil.which("tmux") or "tmux"
+
+    # Build the supervisor prompt
+    skill_path = Path(__file__).parent.parent.parent.parent / "skills" / "orchestration-default.md"
+    if skill_path.exists():
+        skill_content = skill_path.read_text()
+    else:
+        skill_content = "You are a crew supervisor. Coordinate worker agents to complete the task."
+
+    prompt = (
+        f"You are a crew supervisor for the following task:\n\n"
+        f"Goal: {goal}\n"
+        f"Crew ID: {crew_id}\n"
+        f"Repo: {repo_root}\n"
+        f"Verification commands: {', '.join(verification_commands) or 'none'}\n"
+        f"Max rounds: {max_rounds}\n\n"
+        f"{skill_content}\n\n"
+        f"When the task is complete, call crew_accept(crew_id='{crew_id}') and report the result."
+    )
+
+    # Start Claude CLI in tmux
+    session = f"crew-supervisor-{job_id}"
+
+    subprocess.run([tmux, "new-session", "-d", "-s", session, "-c", str(repo_root)], check=False)
+    subprocess.run(
+        [tmux, "send-keys", "-t", f"{session}:0", f"claude '{prompt}'", "C-m"],
+        check=False,
+    )
