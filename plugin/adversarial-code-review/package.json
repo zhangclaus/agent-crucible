@@ -1,0 +1,13 @@
+{
+  "name": "adversarial-code-review",
+  "version": "0.1.0",
+  "description": "Multi-agent adversarial code review for Claude Code. One agent implements, another actively tries to break it.",
+  "type": "module",
+  "keywords": ["claude", "multi-agent", "code-review", "adversarial", "mcp"],
+  "author": "zhangclaus",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhangclaus/adversarial-code-review"
+  }
+}
