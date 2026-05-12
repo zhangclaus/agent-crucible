@@ -43,8 +43,19 @@ The key insight: **the Reviewer is adversarial**. It doesn't just check "do test
 git clone https://github.com/zhangclaus/agent-crucible.git
 cd agent-crucible
 
-# Copy plugin to Claude Code
-cp -r plugin/agent-crucible ~/.claude/plugins/
+# Create plugin directory structure
+mkdir -p ~/.claude/plugins/cache/agent-crucible/agent-crucible/0.1.0
+
+# Copy plugin files
+cp -r plugin/agent-crucible/* ~/.claude/plugins/cache/agent-crucible/agent-crucible/0.1.0/
+
+# Register plugin (add to installed_plugins.json)
+# Edit ~/.claude/plugins/installed_plugins.json and add:
+# "agent-crucible@agent-crucible": [{
+#   "scope": "user",
+#   "installPath": "~/.claude/plugins/cache/agent-crucible/agent-crucible/0.1.0",
+#   "version": "0.1.0"
+# }]
 
 # Restart Claude Code
 ```
