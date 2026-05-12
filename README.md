@@ -39,7 +39,7 @@ The key insight: **the Reviewer is adversarial**. It doesn't just check "do test
 ### Install
 
 ```bash
-pip install git+https://github.com/zhangclaus/adversarial-code-review.git
+pip install git+https://github.com/zhangclaus/agent-crucible.git
 
 # Verify prerequisites
 acr doctor
@@ -81,12 +81,65 @@ acr crew accept --repo /path/to/your/project
 ## Features
 
 - **Adversarial Verification** — Reviewer actively attacks code; Implementer defends; up to 3 challenge/repair rounds
+- **AI Supervisor Mode** — Supervisor agent directly controls workers via MCP tools (supervisor_mode=True)
 - **Long Task Supervisor** — Multi-stage execution with dynamic planning for complex tasks
 - **Git Worktree Isolation** — Each worker gets an independent worktree; no file conflicts
 - **Event-Sourced Audit Trail** — Every state change recorded in SQLite; full replay capability
 - **MCP Server** — Integrates with Claude Code as native MCP tools
 - **Non-blocking Jobs** — `crew_run` returns immediately; delta-status polling minimizes context usage
 - **Parallel Subtasks** — Multiple workers execute concurrently with adversarial review
+- **Worker Templates** — Predefined roles for common tasks (frontend, backend, test, review)
+
+## Two Modes
+
+### Default Mode (Python Loop)
+```python
+crew_run(repo="/path", goal="Add auth")
+```
+- V4CrewRunner drives the orchestration loop
+- Automatic verification, challenge, and retry
+- Minimal context usage
+
+### Supervisor Mode (AI Control)
+```python
+crew_run(repo="/path", goal="Add auth", supervisor_mode=True)
+```
+- Supervisor agent directly controls workers
+- Full flexibility in orchestration strategy
+- Access to all supervisor tools
+
+## MCP Tools
+
+### Core Tools
+| Tool | Description |
+|------|-------------|
+| `crew_run` | Start a non-blocking review job (returns `job_id`) |
+| `crew_job_status` | Poll job status with delta tracking |
+| `crew_cancel` | Cancel a running job |
+| `crew_verify` | Run a verification command |
+| `crew_accept` | Accept and finalize results |
+
+### Supervisor Mode Tools
+| Tool | Description |
+|------|-------------|
+| `crew_spawn` | Spawn worker agent with template or custom label |
+| `crew_observe` | Observe worker output (structured, not raw) |
+| `crew_changes` | View changed files across all workers |
+| `crew_diff` | View diff for specific file |
+| `crew_stop_worker` | Stop specific worker |
+| `crew_challenge` | Challenge worker with issues |
+
+## Worker Templates
+
+| Template | Authority | Use Case |
+|----------|-----------|----------|
+| `targeted-code-editor` | source_write | Implementing code changes |
+| `repo-context-scout` | readonly | Exploring codebase |
+| `patch-risk-auditor` | readonly | Reviewing changes for risks |
+| `verification-failure-analyst` | source_write | Diagnosing test failures |
+| `frontend-developer` | source_write | Frontend changes (UI, components, styles) |
+| `backend-developer` | source_write | Backend changes (API, services, database) |
+| `test-writer` | source_write | Writing and updating tests |
 
 ## CLI Commands
 
@@ -99,16 +152,6 @@ acr crew accept --repo /path/to/your/project
 | `acr crew accept` | Accept crew results |
 | `acr crew stop` | Stop all workers |
 | `acr crew verify` | Run verification command |
-
-## MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `crew_run` | Start a non-blocking review job (returns `job_id`) |
-| `crew_job_status` | Poll job status with delta tracking |
-| `crew_cancel` | Cancel a running job |
-| `crew_verify` | Run a verification command |
-| `crew_accept` | Accept and finalize results |
 
 ## Testing
 
