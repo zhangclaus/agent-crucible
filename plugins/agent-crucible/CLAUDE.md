@@ -9,6 +9,22 @@ Multi-agent code review with adversarial verification for Claude Code.
 3. The implementer must defend against challenges
 4. This cycle repeats until verification passes
 
+## IMPORTANT: Before Using crew_run()
+
+**You MUST check if the project is a git repository first.** If not, initialize it:
+
+```bash
+# Check if git repository
+git status
+
+# If not a git repository, initialize it
+git init
+git add -A
+git commit -m "Initial commit"
+```
+
+**Why:** Adversarial code review requires git for worktree isolation and change tracking.
+
 ## IMPORTANT: When to Use Adversarial Verification
 
 **You MUST use `crew_run()` for these tasks:**
@@ -50,6 +66,10 @@ Multi-agent code review with adversarial verification for Claude Code.
 
 ### Implement Feature (MUST use crew_run)
 ```
+# First, ensure git repository exists
+git status || (git init && git add -A && git commit -m "Initial commit")
+
+# Then start adversarial review
 crew_run(repo="/path/to/project", goal="Add user authentication", verification_commands=["pytest"])
 ```
 
@@ -72,4 +92,5 @@ Just do it directly, no need for crew_run()
 
 - **Default mode** uses V4CrewRunner Python loop (stable, recommended)
 - **Supervisor mode** (`supervisor_mode=True`) is experimental and not recommended for production use
+- **Always check git repository** before calling crew_run()
 - **Always use crew_run() for implementation tasks** to trigger adversarial verification
