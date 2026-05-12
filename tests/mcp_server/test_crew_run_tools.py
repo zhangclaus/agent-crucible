@@ -121,6 +121,43 @@ class TestSupervisorMode:
         assert response["status"] == "running"
 
 
+class TestSupervisorModeIntegration:
+    def test_supervisor_mode_returns_supervisor_prompt(self):
+        """supervisor_mode should return a prompt that includes orchestration instructions."""
+        from unittest.mock import MagicMock
+        from codex_claude_orchestrator.mcp_server.tools.crew_run import register_run_tools
+
+        server = MagicMock()
+        captured_tools = {}
+        def capture_tool(name):
+            def decorator(func):
+                captured_tools[name] = func
+                return func
+            return decorator
+        server.tool = capture_tool
+
+        controller = MagicMock()
+        job_manager = MagicMock()
+        job_manager.create_job.return_value = "job-super-789"
+
+        register_run_tools(server, controller, job_manager)
+
+        import asyncio
+        result = asyncio.run(captured_tools["crew_run"](
+            repo="/tmp/test",
+            goal="Add user auth",
+            supervisor_mode=True,
+        ))
+
+        import json
+        response = json.loads(result[0].text)
+        assert response["job_id"] == "job-super-789"
+        # The prompt should mention the polling/accept tools the background agent uses
+        prompt = response.get("background_agent_prompt", "")
+        assert "crew_job_status" in prompt
+        assert "crew_accept" in prompt
+
+
 class TestRunnerCacheEviction:
     def test_cache_does_not_grow_beyond_limit(self):
         """_runner_cache should evict oldest entries when full."""
