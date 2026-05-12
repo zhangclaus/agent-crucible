@@ -39,13 +39,17 @@ The key insight: **the Reviewer is adversarial**. It doesn't just check "do test
 ### 1. Install Plugin
 
 ```bash
-# Add marketplace
-claude plugin marketplace add zhangclaus/agent-crucible
+# 1. Start Claude Code
+claude
 
-# Install plugin
-claude plugin install agent-crucible
+# 2. Add marketplace (in Claude Code session)
+/plugin marketplace add zhangclaus/agent-crucible
 
-# Restart Claude Code
+# 3. Install plugin (note: @marketplace-name suffix required)
+/plugin install agent-crucible@agent-crucible
+
+# 4. Restart Claude Code
+# Press Ctrl+C to exit, then run `claude` again
 ```
 
 ### 2. Use in Claude Code
