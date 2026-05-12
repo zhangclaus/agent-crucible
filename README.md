@@ -36,40 +36,52 @@ The key insight: **the Reviewer is adversarial**. It doesn't just check "do test
 
 ## Quick Start
 
-### Install
+### 1. Install Plugin
 
 ```bash
-pip install git+https://github.com/zhangclaus/agent-crucible.git
+# Clone the repository
+git clone https://github.com/zhangclaus/agent-crucible.git
+cd agent-crucible
 
-# Verify prerequisites
+# Copy plugin to Claude Code
+cp -r plugin/agent-crucible ~/.claude/plugins/
+
+# Restart Claude Code
+```
+
+### 2. Use in Claude Code
+
+After restarting Claude Code, the plugin is automatically loaded. Use the `/agent-crucible` skill:
+
+```
+/agent-crucible 帮我审查这个模块的代码质量
+```
+
+Or directly call MCP tools:
+
+```python
+# Simple review
+crew_run(repo="/path/to/project", goal="Add user authentication")
+
+# Supervisor mode (direct control)
+crew_run(repo="/path/to/project", goal="Add user auth", supervisor_mode=True)
+```
+
+### 3. CLI (Alternative)
+
+```bash
+# Install package
+pip install -e .
+
+# Check prerequisites
 acr doctor
-```
 
-### Claude Code Integration (MCP)
-
-```bash
-# Auto-generate .mcp.json
-acr init
-
-# Restart Claude Code, then use:
-crew_run(repo="/path/to/project", goal="Refactor auth module")
-```
-
-### CLI
-
-```bash
 # Run adversarial code review
 acr crew run \
   --repo /path/to/your/project \
-  --goal "Add user registration with email verification" \
+  --goal "Add user registration" \
   --verification-command "pytest" \
   --max-rounds 3
-
-# Check status
-acr crew status --repo /path/to/your/project
-
-# Accept results
-acr crew accept --repo /path/to/your/project
 ```
 
 ## Requirements
@@ -81,39 +93,19 @@ acr crew accept --repo /path/to/your/project
 ## Features
 
 - **Adversarial Verification** — Reviewer actively attacks code; Implementer defends; up to 3 challenge/repair rounds
-- **AI Supervisor Mode** — Supervisor agent directly controls workers via MCP tools (supervisor_mode=True)
+- **AI Supervisor Mode** — Supervisor agent directly controls workers via MCP tools
 - **Long Task Supervisor** — Multi-stage execution with dynamic planning for complex tasks
 - **Git Worktree Isolation** — Each worker gets an independent worktree; no file conflicts
 - **Event-Sourced Audit Trail** — Every state change recorded in SQLite; full replay capability
 - **MCP Server** — Integrates with Claude Code as native MCP tools
-- **Non-blocking Jobs** — `crew_run` returns immediately; delta-status polling minimizes context usage
-- **Parallel Subtasks** — Multiple workers execute concurrently with adversarial review
 - **Worker Templates** — Predefined roles for common tasks (frontend, backend, test, review)
-
-## Two Modes
-
-### Default Mode (Python Loop)
-```python
-crew_run(repo="/path", goal="Add auth")
-```
-- V4CrewRunner drives the orchestration loop
-- Automatic verification, challenge, and retry
-- Minimal context usage
-
-### Supervisor Mode (AI Control)
-```python
-crew_run(repo="/path", goal="Add auth", supervisor_mode=True)
-```
-- Supervisor agent directly controls workers
-- Full flexibility in orchestration strategy
-- Access to all supervisor tools
 
 ## MCP Tools
 
 ### Core Tools
 | Tool | Description |
 |------|-------------|
-| `crew_run` | Start a non-blocking review job (returns `job_id`) |
+| `crew_run` | Start a non-blocking review job |
 | `crew_job_status` | Poll job status with delta tracking |
 | `crew_cancel` | Cancel a running job |
 | `crew_verify` | Run a verification command |
@@ -140,18 +132,6 @@ crew_run(repo="/path", goal="Add auth", supervisor_mode=True)
 | `frontend-developer` | source_write | Frontend changes (UI, components, styles) |
 | `backend-developer` | source_write | Backend changes (API, services, database) |
 | `test-writer` | source_write | Writing and updating tests |
-
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `acr init` | Generate `.mcp.json` for Claude Code |
-| `acr doctor` | Check prerequisites (Python, Claude CLI, tmux) |
-| `acr crew run` | Start adversarial code review |
-| `acr crew status` | Show crew status |
-| `acr crew accept` | Accept crew results |
-| `acr crew stop` | Stop all workers |
-| `acr crew verify` | Run verification command |
 
 ## Testing
 
