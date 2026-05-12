@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agent-crucible",
+  "description": "Multi-agent code review with adversarial verification for Claude Code",
+  "owner": {
+    "name": "zhangclaus",
+    "email": "zhangclaus@users.noreply.github.com"
+  },
+  "plugins": [
+    {
+      "name": "agent-crucible",
+      "description": "Multi-agent code review with adversarial verification. One agent implements, another actively tries to break it.",
+      "category": "development",
+      "source": "./plugins/agent-crucible",
+      "homepage": "https://github.com/zhangclaus/agent-crucible"
+    }
+  ]
+}
