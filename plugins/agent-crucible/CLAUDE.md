@@ -1,6 +1,6 @@
 # Agent Crucible Plugin
 
-Multi-agent code review with adversarial verification for Claude Code.
+Multi-agent adversarial orchestration for software engineering tasks.
 
 ## What It Does
 
@@ -42,13 +42,25 @@ git commit -m "Initial commit"
 
 ## Available Tools
 
-### Core Tools (Default Mode)
-- `crew_run(repo, goal)` — Start adversarial review
+### Job Management
+- `crew_run(repo, goal)` — Start non-blocking orchestration job (returns job_id)
 - `crew_run(repo, goal, verification_commands=["pytest"])` — With verification
-- `crew_job_status(job_id)` — Poll job status
+- `crew_job_status(job_id)` — Poll job status (delta mode)
 - `crew_cancel(job_id)` — Cancel a running job
+
+### Crew Lifecycle
+- `crew_spawn(repo, crew_id, label)` — Spawn worker with template
+- `crew_stop_worker(repo, crew_id, worker_id)` — Stop specific worker
 - `crew_verify(crew_id, command)` — Run verification command
 - `crew_accept(crew_id, summary)` — Accept and finalize results
+- `crew_challenge(crew_id, summary)` — Challenge worker with issues
+
+### Context & Observation
+- `crew_observe(repo, crew_id, worker_id)` — Observe worker output (structured)
+- `crew_changes(crew_id)` — View changed files across all workers
+- `crew_diff(crew_id, file)` — View diff for specific file
+- `crew_blackboard(crew_id)` — Read shared knowledge base
+- `crew_events(repo, crew_id)` — Read key events
 
 ## Worker Templates
 
@@ -91,6 +103,6 @@ Just do it directly, no need for crew_run()
 ## Notes
 
 - **Default mode** uses V4CrewRunner Python loop (stable, recommended)
-- **Supervisor mode** (`supervisor_mode=True`) is experimental and not recommended for production use
+- **Terminal auto-attach** — Worker tmux sessions automatically open in Terminal.app
 - **Always check git repository** before calling crew_run()
 - **Always use crew_run() for implementation tasks** to trigger adversarial verification

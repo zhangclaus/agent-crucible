@@ -1,6 +1,6 @@
 # Agent Crucible Plugin for Claude Code
 
-Multi-agent code review with adversarial verification. One agent implements, another actively tries to break it.
+Multi-agent adversarial orchestration for software engineering tasks. Workers implement, reviewers attack, verification loops until it's solid.
 
 ## Installation
 
@@ -14,30 +14,33 @@ Or manually:
 
 ## What You Get
 
-- `/agent-crucible` skill for code review
+- `/agent-crucible` skill for adversarial code review
 - MCP tools for multi-agent orchestration
 - Worker templates for common roles
-- Supervisor mode for direct control
+- Automatic terminal attach — watch workers in real time
 
 ## Quick Start
 
 After installation, use in Claude Code:
 
 ```
-# Simple review
+# Simple review — returns job_id, polls in background
 crew_run(repo="/path/to/project", goal="Add user authentication")
 
-# Supervisor mode (direct control)
-crew_run(repo="/path/to/project", goal="Add user auth", supervisor_mode=True)
+# With verification
+crew_run(repo="/path/to/project", goal="Add auth", verification_commands=["pytest"])
+
+# Parallel workers for complex tasks
+crew_run(repo="/path/to/project", goal="Refactor auth module", parallel=True, max_workers=3)
 ```
 
 ## Features
 
 - **Adversarial Verification** — Reviewer actively attacks code
-- **Worker Templates** — Predefined roles for common tasks
-- **Supervisor Mode** — Direct control over workers
+- **Parallel Workers** — Multiple workers in isolated worktrees
+- **Terminal Auto-Attach** — Worker sessions open in Terminal.app automatically
 - **Structured Output** — Compressed, actionable feedback
-- **Delta Polling** — Minimal context usage
+- **Delta Polling** — Minimal context usage for status checks
 
 ## License
 

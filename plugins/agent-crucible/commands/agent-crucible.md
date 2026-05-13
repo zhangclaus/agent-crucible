@@ -1,11 +1,11 @@
 ---
-description: Multi-agent adversarial code review for Claude Code
+description: Multi-agent adversarial orchestration for software engineering tasks
 disable-model-invocation: false
 ---
 
 # Agent Crucible
 
-Use this command to perform adversarial code review with multiple agents.
+Use this command to perform adversarial multi-agent orchestration — one agent implements, another actively tries to break it.
 
 ## How It Works
 

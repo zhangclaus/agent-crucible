@@ -280,7 +280,7 @@ def _build_runner(controller, repo: str):
     event_store = build_v4_event_store(repo_path, readonly=False)
     artifact_store = ArtifactStore(repo_path / ".orchestrator" / "artifacts")
     adapter = ClaudeCodeTmuxAdapter(
-        native_session=NativeClaudeSession(),
+        native_session=NativeClaudeSession(open_terminal_on_start=True),
     )
     supervisor = V4Supervisor(
         event_store=event_store,
