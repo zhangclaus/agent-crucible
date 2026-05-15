@@ -1,181 +1,224 @@
-"""Tests for crew_run helper functions."""
+"""Tests for crew_run (blocking), crew_job_status, and crew_cancel MCP tools."""
 
 from __future__ import annotations
 
+import asyncio
+import json
+import time
+from pathlib import Path
+
 import pytest
 
-
-class TestBuildTerminalResponse:
-    def test_extracted_function_exists(self):
-        """_build_terminal_response should be a standalone function."""
-        from codex_claude_orchestrator.mcp_server.tools.crew_run import _build_terminal_response
-
-        snap = {
-            "job_id": "j1",
-            "status": "done",
-            "elapsed_seconds": 42,
-            "current_round": 3,
-            "result": {"crew_id": "c1"},
-            "error": None,
-            "subtasks": None,
-        }
-        result = _build_terminal_response(snap)
-        assert result["status"] == "done"
-        assert result["job_id"] == "j1"
-        assert result["result"] == {"crew_id": "c1"}
-
-    def test_failed_status_includes_error(self):
-        from codex_claude_orchestrator.mcp_server.tools.crew_run import _build_terminal_response
-
-        snap = {
-            "job_id": "j2",
-            "status": "failed",
-            "elapsed_seconds": 10,
-            "current_round": 1,
-            "result": None,
-            "error": "worker crashed",
-            "subtasks": None,
-        }
-        result = _build_terminal_response(snap)
-        assert result["status"] == "failed"
-        assert result["error"] == "worker crashed"
+from codex_claude_orchestrator.mcp_server.job_manager import JobManager
+from codex_claude_orchestrator.mcp_server.tools.crew_run import register_run_tools
 
 
-    def test_failure_context_included_as_failure_details(self):
-        """When snap has failure_context, response should include failure_details."""
-        from codex_claude_orchestrator.mcp_server.tools.crew_run import _build_terminal_response
+class FakeServer:
+    """Minimal fake FastMCP server that captures registered tool functions."""
 
-        snap = {
-            "job_id": "j3",
-            "status": "done",
-            "elapsed_seconds": 120,
-            "current_round": 3,
-            "result": {"status": "max_rounds_exhausted", "crew_id": "c1"},
-            "error": None,
-            "subtasks": None,
-            "failure_context": {
-                "last_verification": {
-                    "command": "pytest",
-                    "output": "3 tests failed",
-                    "returncode": 1,
-                },
-                "affected_files": ["src/app.py"],
-                "rounds_attempted": 3,
-                "last_phase": "verifying",
-            },
-        }
-        result = _build_terminal_response(snap)
-        assert "failure_details" in result
-        assert result["failure_details"]["last_verification"]["output"] == "3 tests failed"
-        assert result["failure_details"]["affected_files"] == ["src/app.py"]
-        assert result["failure_details"]["rounds_attempted"] == 3
+    def __init__(self):
+        self.tools = {}
 
-    def test_no_failure_details_when_no_failure_context(self):
-        """When snap has no failure_context, response should not include failure_details."""
-        from codex_claude_orchestrator.mcp_server.tools.crew_run import _build_terminal_response
-
-        snap = {
-            "job_id": "j4",
-            "status": "done",
-            "elapsed_seconds": 10,
-            "current_round": 1,
-            "result": {"status": "ready_for_codex_accept"},
-            "error": None,
-            "subtasks": None,
-        }
-        result = _build_terminal_response(snap)
-        assert "failure_details" not in result
+    def tool(self, name: str):
+        def decorator(func):
+            self.tools[name] = func
+            return func
+        return decorator
 
 
-class TestSupervisorMode:
-    def test_crew_run_supervisor_mode_accepted(self):
-        """crew_run with supervisor_mode=True should be accepted."""
-        from unittest.mock import MagicMock
-        from codex_claude_orchestrator.mcp_server.tools.crew_run import register_run_tools
+class FakeRunner:
+    def __init__(self, result=None, delay=0.0):
+        self._result = result or {"status": "ready_for_codex_accept", "crew_id": "crew-1"}
+        self._delay = delay
 
-        server = MagicMock()
-        captured_tools = {}
-        def capture_tool(name):
-            def decorator(func):
-                captured_tools[name] = func
-                return func
-            return decorator
-        server.tool = capture_tool
+    def run(self, **kwargs):
+        if self._delay:
+            time.sleep(self._delay)
+        return self._result
 
-        controller = MagicMock()
-        job_manager = MagicMock()
-        job_manager.create_job.return_value = "job-test-123"
+    def supervise(self, **kwargs):
+        return self.run(**kwargs)
 
-        register_run_tools(server, controller, job_manager)
+    async def async_supervise(self, **kwargs):
+        if self._delay:
+            time.sleep(self._delay)
+        return self._result
 
-        import asyncio
-        result = asyncio.run(captured_tools["crew_run"](
-            repo="/tmp/test",
-            goal="test goal",
-            supervisor_mode=True,
-        ))
-
-        import json
-        response = json.loads(result[0].text)
-        assert response["job_id"] == "job-test-123"
-        assert response["status"] == "running"
+    @property
+    def adapter(self):
+        return None
 
 
-class TestSupervisorModeIntegration:
-    def test_supervisor_mode_returns_supervisor_prompt(self):
-        """supervisor_mode should return a prompt that includes orchestration instructions."""
-        from unittest.mock import MagicMock
-        from codex_claude_orchestrator.mcp_server.tools.crew_run import register_run_tools
-
-        server = MagicMock()
-        captured_tools = {}
-        def capture_tool(name):
-            def decorator(func):
-                captured_tools[name] = func
-                return func
-            return decorator
-        server.tool = capture_tool
-
-        controller = MagicMock()
-        job_manager = MagicMock()
-        job_manager.create_job.return_value = "job-super-789"
-
-        register_run_tools(server, controller, job_manager)
-
-        import asyncio
-        result = asyncio.run(captured_tools["crew_run"](
-            repo="/tmp/test",
-            goal="Add user auth",
-            supervisor_mode=True,
-        ))
-
-        import json
-        response = json.loads(result[0].text)
-        assert response["job_id"] == "job-super-789"
-        # The prompt should mention the polling/accept tools the background agent uses
-        prompt = response.get("background_agent_prompt", "")
-        assert "crew_job_status" in prompt
-        assert "crew_accept" in prompt
+@pytest.fixture
+def setup(tmp_path):
+    server = FakeServer()
+    controller = None
+    job_manager = JobManager()
+    runner = FakeRunner(delay=0.1)
+    register_run_tools(server, controller, job_manager, runner=runner)
+    return server, job_manager
 
 
-class TestRunnerCacheEviction:
-    def test_cache_does_not_grow_beyond_limit(self):
-        """_runner_cache should evict oldest entries when full."""
-        from codex_claude_orchestrator.mcp_server.tools import crew_run
+# --- crew_run: blocking mode ---
 
-        # Save original cache
-        original_cache = crew_run._runner_cache.copy()
-        try:
-            crew_run._runner_cache.clear()
+def test_crew_run_blocks_and_returns_final_result(setup):
+    """crew_run should block until job completes and return final result."""
+    server, job_manager = setup
+    crew_run = server.tools["crew_run"]
 
-            # Fill cache beyond limit
-            for i in range(20):
-                crew_run._runner_cache[f"repo-{i}"] = f"runner-{i}"
+    result = asyncio.run(crew_run(repo="/tmp", goal="test goal"))
+    data = json.loads(result[0].text)
 
-            # Cache should be bounded (max 16 entries)
-            assert len(crew_run._runner_cache) <= 16, (
-                f"Cache has {len(crew_run._runner_cache)} entries, expected <= 16"
-            )
-        finally:
-            crew_run._runner_cache.clear()
-            crew_run._runner_cache.update(original_cache)
+    assert data["status"] == "done"
+    assert data["result"]["status"] == "ready_for_codex_accept"
+    assert "elapsed" in data
+    assert "rounds" in data
+
+
+def test_crew_run_returns_error_on_failure():
+    """crew_run should return error when job fails."""
+    server = FakeServer()
+    jm = JobManager()
+
+    class FailingRunner:
+        def run(self, **kwargs):
+            raise RuntimeError("boom")
+        def supervise(self, **kwargs):
+            raise RuntimeError("boom")
+
+    register_run_tools(server, None, jm, runner=FailingRunner())
+
+    result = asyncio.run(server.tools["crew_run"](repo="/tmp", goal="test"))
+    data = json.loads(result[0].text)
+
+    assert data["status"] == "failed"
+    assert "boom" in data["error"]
+
+
+def test_crew_run_parallel_completes():
+    """crew_run with parallel=True should block and return final result."""
+    server = FakeServer()
+    jm = JobManager()
+    runner = FakeRunner(delay=0.0)
+    register_run_tools(server, None, jm, runner=runner)
+
+    result = asyncio.run(server.tools["crew_run"](
+        repo="/tmp",
+        goal="implement feature",
+        parallel=True,
+        max_workers=2,
+    ))
+    data = json.loads(result[0].text)
+
+    assert data["status"] == "done"
+    assert data["result"]["status"] == "ready_for_codex_accept"
+
+
+# --- crew_job_status (still available for direct use) ---
+
+def test_crew_job_status_unchanged_when_no_change():
+    """crew_job_status should return 'unchanged' when state hasn't changed."""
+    jm = JobManager()
+    runner = FakeRunner(delay=5.0)  # slow job
+    server = FakeServer()
+    register_run_tools(server, None, jm, runner=runner)
+
+    # Start job directly via job_manager (non-blocking) to test polling
+    job_id = jm.create_job(
+        runner=runner,
+        repo_root=Path("/tmp"),
+        goal="test",
+    )
+
+    # First poll reports initial state
+    time.sleep(0.05)
+    crew_job_status = server.tools["crew_job_status"]
+    status1 = asyncio.run(crew_job_status(job_id=job_id))
+    data1 = json.loads(status1[0].text)
+    assert data1["status"] == "running"
+
+    # Second poll - unchanged
+    time.sleep(0.05)
+    status2 = asyncio.run(crew_job_status(job_id=job_id))
+    data2 = json.loads(status2[0].text)
+    assert data2["status"] == "unchanged"
+
+    # Cleanup
+    jm.cancel_job(job_id)
+
+
+def test_crew_job_status_terminal_returns_full_result():
+    """crew_job_status should return full result for terminal jobs."""
+    jm = JobManager()
+    runner = FakeRunner(delay=0.0)
+    server = FakeServer()
+    register_run_tools(server, None, jm, runner=runner)
+
+    job_id = jm.create_job(runner=runner, repo_root=Path("/tmp"), goal="test")
+    time.sleep(0.3)
+
+    crew_job_status = server.tools["crew_job_status"]
+    status = asyncio.run(crew_job_status(job_id=job_id))
+    data = json.loads(status[0].text)
+
+    assert data["status"] == "done"
+    assert data["result"]["status"] == "ready_for_codex_accept"
+
+
+def test_crew_job_status_nonexistent():
+    """crew_job_status should return error for unknown job_id."""
+    jm = JobManager()
+    server = FakeServer()
+    register_run_tools(server, None, jm)
+
+    result = asyncio.run(server.tools["crew_job_status"](job_id="nonexistent"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+# --- crew_cancel ---
+
+def test_crew_cancel():
+    """crew_cancel should cancel a running job."""
+    jm = JobManager()
+    slow_runner = FakeRunner(delay=5)
+    server = FakeServer()
+    register_run_tools(server, None, jm, runner=slow_runner)
+
+    job_id = jm.create_job(runner=slow_runner, repo_root=Path("/tmp"), goal="test")
+
+    cancel_result = asyncio.run(server.tools["crew_cancel"](job_id=job_id))
+    data = json.loads(cancel_result[0].text)
+    assert data["status"] == "cancelling"
+
+    time.sleep(0.1)
+    status = asyncio.run(server.tools["crew_job_status"](job_id=job_id))
+    status_data = json.loads(status[0].text)
+    assert status_data["status"] == "cancelled"
+
+
+def test_crew_cancel_nonexistent():
+    """crew_cancel should return error for unknown job_id."""
+    jm = JobManager()
+    server = FakeServer()
+    register_run_tools(server, None, jm)
+
+    result = asyncio.run(server.tools["crew_cancel"](job_id="nonexistent"))
+    data = json.loads(result[0].text)
+    assert "error" in data
+
+
+def test_crew_cancel_terminal_job_returns_warning():
+    """Cancelling an already-done job returns a warning."""
+    jm = JobManager()
+    fast_runner = FakeRunner(delay=0.0)
+    server = FakeServer()
+    register_run_tools(server, None, jm, runner=fast_runner)
+
+    job_id = jm.create_job(runner=fast_runner, repo_root=Path("/tmp"), goal="test")
+    time.sleep(0.3)
+
+    cancel_result = asyncio.run(server.tools["crew_cancel"](job_id=job_id))
+    data = json.loads(cancel_result[0].text)
+    assert data["status"] == "done"
+    assert "warning" in data

@@ -707,24 +707,3 @@ class TestFailureContextPropagation:
         assert snap["failure_context"] is not None
         assert snap["failure_context"]["affected_files"] == ["src/x.py"]
 
-
-class TestSupervisorModeJob:
-    def test_create_job_supervisor_mode(self):
-        """create_job with supervisor_mode should start a supervisor agent."""
-        from unittest.mock import MagicMock, patch
-
-        manager = JobManager()
-        mock_runner = MagicMock()
-
-        with patch("codex_claude_orchestrator.mcp_server.job_manager._start_supervisor_agent") as mock_start:
-            mock_start.return_value = None
-            job_id = manager.create_job(
-                runner=mock_runner,
-                repo_root=Path("/tmp/test"),
-                goal="test goal",
-                supervisor_mode=True,
-            )
-
-        assert job_id.startswith("job-")
-        job = manager.get_job(job_id)
-        assert job["status"] in ("running", "done", "failed")

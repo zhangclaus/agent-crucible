@@ -22,11 +22,24 @@ class TestCrewObserve:
             return decorator
         server.tool = capture_tool
 
+        # Mock the internal worker pool chain for the blocking observe
+        # First call = baseline snapshot (no marker), second call = poll (marker appears)
+        native_session = MagicMock()
+        native_session.observe.side_effect = [
+            {"snapshot": "worker output here\n", "marker_seen": False},
+            {"snapshot": "worker output here\n<<<CODEX_TURN_DONE status=ready_for_codex>>>", "marker_seen": True},
+        ]
+        recorder = MagicMock()
+        recorder.active_worker_ids.return_value = ["worker-1"]
+
+        worker_pool = MagicMock()
+        worker_pool._native_session = native_session
+        worker_pool._recorder = recorder
+        worker_pool._find_worker.return_value = {"terminal_pane": "session:claude.0"}
+
         controller = MagicMock()
-        controller.observe_worker.return_value = {
-            "snapshot": "worker output here\n<<<CODEX_TURN_DONE>>>",
-            "marker_seen": True,
-        }
+        controller._worker_pool = worker_pool
+
         register_context_tools(server, controller)
 
         import asyncio
@@ -37,7 +50,6 @@ class TestCrewObserve:
         ))
 
         response = json.loads(result[0].text)
-        # Should have structured fields, not raw snapshot
         assert "worker_id" in response or "status" in response or "error" in response
 
 

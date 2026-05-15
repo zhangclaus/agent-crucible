@@ -21,6 +21,7 @@ class Job:
     result: dict[str, Any] | None = None
     error: str | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    done_event: threading.Event = field(default_factory=threading.Event)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     thread: threading.Thread | None = None
     completed_at: float | None = None
@@ -62,6 +63,25 @@ def _next_poll_seconds(job: Job) -> int:
     return 60
 
 
+def _build_result_snapshot(snap: dict[str, Any]) -> dict[str, Any]:
+    """Build final result dict from a job status snapshot."""
+    base: dict[str, Any] = {
+        "job_id": snap["job_id"],
+        "status": snap["status"],
+        "elapsed": round(snap["elapsed_seconds"]),
+        "rounds": snap["current_round"],
+    }
+    if snap["status"] == "done" and snap.get("result") is not None:
+        base["result"] = snap["result"]
+    if snap["status"] == "failed" and snap.get("error"):
+        base["error"] = snap["error"]
+    if snap.get("subtasks"):
+        base["subtasks"] = snap["subtasks"]
+    if snap.get("failure_context"):
+        base["failure_details"] = snap["failure_context"]
+    return base
+
+
 _MAX_CONCURRENT_JOBS = 8
 
 
@@ -84,7 +104,6 @@ class JobManager:
         max_workers: int = 3,
         subtasks: list[dict[str, str]] | None = None,
         long_task: bool = False,
-        supervisor_mode: bool = False,
     ) -> str:
         """Create a job, start background thread, return job_id."""
         if self._shutdown_event.is_set():
@@ -102,17 +121,6 @@ class JobManager:
 
         def _run() -> None:
             try:
-                if supervisor_mode:
-                    _start_supervisor_agent(
-                        repo_root=repo_root,
-                        goal=goal,
-                        crew_id=crew_id or f"crew-{job_id}",
-                        verification_commands=verification_commands or [],
-                        max_rounds=max_rounds,
-                        job_id=job_id,
-                        job_manager=self,
-                    )
-                    return
                 if parallel:
                     import asyncio
                     if subtasks:
@@ -176,6 +184,7 @@ class JobManager:
                 with self._lock:
                     job.completed_at = time.monotonic()
                     job.update_elapsed()
+                job.done_event.set()
 
         thread = threading.Thread(target=_run, daemon=True, name=f"crew-job-{job_id}")
         job.thread = thread
@@ -185,6 +194,20 @@ class JobManager:
 
         thread.start()
         return job_id
+
+    def run_and_wait(
+        self,
+        **create_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Create a job, block until completion, return final result dict.
+
+        The calling thread blocks on a threading.Event — no LLM tokens consumed.
+        """
+        job_id = self.create_job(**create_kwargs)
+        job = self._jobs[job_id]
+        job.done_event.wait()
+        snap = self.get_job_status(job_id)
+        return _build_result_snapshot(snap)
 
     def _on_progress(self, job_id: str, phase: str, round_index: int) -> None:
         with self._lock:
@@ -358,108 +381,3 @@ def _split_goal_into_subtasks(goal: str) -> list:
             scope=["src/", "tests/"],
         )
     ]
-
-
-def _start_supervisor_agent(
-    *,
-    repo_root: Path,
-    goal: str,
-    crew_id: str,
-    verification_commands: list[str],
-    max_rounds: int,
-    job_id: str,
-    job_manager: "JobManager",
-) -> None:
-    """Start a Claude CLI supervisor agent that directly controls workers via MCP tools."""
-    import importlib.resources
-    import json
-    import shutil
-    import shlex
-    import subprocess
-
-    claude = shutil.which("claude") or "claude"
-    tmux = shutil.which("tmux") or "tmux"
-
-    # Bug 3 fix: load skill from package resources
-    try:
-        skill_content = importlib.resources.files(
-            "codex_claude_orchestrator.skills"
-        ).joinpath("orchestration-default.md").read_text(encoding="utf-8")
-    except (FileNotFoundError, ModuleNotFoundError):
-        skill_content = "You are a crew supervisor. Coordinate worker agents to complete the task."
-
-    prompt = (
-        f"You are a crew supervisor for the following task:\n\n"
-        f"Goal: {goal}\n"
-        f"Crew ID: {crew_id}\n"
-        f"Repo: {repo_root}\n"
-        f"Verification commands: {', '.join(verification_commands) or 'none'}\n"
-        f"Max rounds: {max_rounds}\n\n"
-        f"{skill_content}\n\n"
-        f"When the task is complete, call crew_accept(crew_id='{crew_id}') and report the result."
-    )
-
-    # Bug 2 fix: write prompt to temp file to avoid shell injection
-    prompt_dir = repo_root / ".orchestrator"
-    prompt_dir.mkdir(exist_ok=True)
-    prompt_path = prompt_dir / f"supervisor-prompt-{job_id}.txt"
-    prompt_path.write_text(prompt, encoding="utf-8")
-
-    # Bug 1 fix: pass .mcp.json to claude CLI so it has MCP tools
-    mcp_config = repo_root / ".mcp.json"
-    session = f"crew-supervisor-{job_id}"
-
-    # Build claude command
-    claude_cmd = [claude, "--dangerously-skip-permissions"]
-    if mcp_config.exists():
-        claude_cmd.extend(["--mcp-config", str(mcp_config)])
-    claude_cmd.extend(["-p", f"$(cat {shlex.quote(str(prompt_path))})"])
-
-    # Bug 6 fix: start tmux session and open Terminal.app
-    subprocess.run([tmux, "new-session", "-d", "-s", session, "-c", str(repo_root)], check=False)
-    subprocess.run(
-        [tmux, "send-keys", "-t", f"{session}:0", shlex.join(claude_cmd), "C-m"],
-        check=False,
-    )
-
-    # Open Terminal.app and attach to tmux session
-    shell_command = shlex.join([tmux, "attach", "-t", session])
-    subprocess.run([
-        "osascript",
-        "-e", 'tell application "Terminal"',
-        "-e", "activate",
-        "-e", f"do script {json.dumps(shell_command, ensure_ascii=False)}",
-        "-e", "end tell",
-    ], check=False)
-
-    # Bug 4+5 fix: poll tmux session for completion with cancel support
-    job = job_manager._jobs[job_id]
-
-    def _poll_supervisor_loop() -> None:
-        while True:
-            if job.cancel_event.is_set():
-                subprocess.run([tmux, "kill-session", "-t", session], check=False)
-                # Clean up prompt file
-                prompt_path.unlink(missing_ok=True)
-                with job._lock:
-                    job.status = "cancelled"
-                    job.phase = "idle"
-                    job.completed_at = time.monotonic()
-                return
-            result = subprocess.run(
-                [tmux, "has-session", "-t", session],
-                capture_output=True, check=False,
-            )
-            if result.returncode != 0:
-                # tmux session ended
-                prompt_path.unlink(missing_ok=True)
-                with job._lock:
-                    if job.status != "cancelled":
-                        job.status = "done"
-                    job.phase = "idle"
-                    job.completed_at = time.monotonic()
-                return
-            time.sleep(5)
-
-    poll_thread = threading.Thread(target=_poll_supervisor_loop, daemon=True, name=f"supervisor-poll-{job_id}")
-    poll_thread.start()

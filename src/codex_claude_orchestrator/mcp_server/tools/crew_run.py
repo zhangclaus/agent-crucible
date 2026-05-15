@@ -67,15 +67,11 @@ def register_run_tools(
         max_workers: int = 3,
         subtasks: list[dict[str, str]] | None = None,
         long_task: bool = False,
-        supervisor_mode: bool = False,
     ) -> list[TextContent]:
-        """Start a crew job in the background (non-blocking).
+        """Start a crew job and block until it completes.
 
-        Returns job_id + background_agent_prompt. The caller should spawn a
-        background agent (Agent tool with run_in_background=true) using the
-        returned prompt to handle polling, so the main session context stays
-        clean. The background agent will poll crew_job_status and call
-        crew_accept when done.
+        The tool call blocks on the server side (threading.Event, no LLM tokens
+        consumed) and returns the final result directly.
 
         Args:
             repo: Repository root path
@@ -91,11 +87,9 @@ def register_run_tools(
                 single-subtask split.
             long_task: Enable long task mode with multi-stage execution
                 (default False). When True, delegates to LongTaskSupervisor.
-            supervisor_mode: Enable AI Supervisor Agent mode (default False).
-                When True, starts a Claude CLI agent that directly controls
-                workers via MCP tools (crew_spawn, crew_observe, crew_challenge, etc.)
-                instead of using the V4CrewRunner Python loop.
         """
+        import asyncio
+
         # Clamp resource limits
         max_workers = min(max(int(max_workers), 1), 5)
         max_rounds = min(max(int(max_rounds), 1), 10)
@@ -103,7 +97,6 @@ def register_run_tools(
         if runner is None:
             if repo not in _runner_cache:
                 if len(_runner_cache) >= _MAX_RUNNER_CACHE:
-                    # Evict oldest entry
                     oldest_key = next(iter(_runner_cache))
                     del _runner_cache[oldest_key]
                 _runner_cache[repo] = _build_runner(controller, repo)
@@ -111,7 +104,9 @@ def register_run_tools(
         else:
             cached_runner = runner
 
-        job_id = job_manager.create_job(
+        # run_and_wait blocks on threading.Event — no LLM tokens consumed
+        result = await asyncio.to_thread(
+            job_manager.run_and_wait,
             runner=cached_runner,
             repo_root=Path(repo),
             goal=goal,
@@ -122,35 +117,12 @@ def register_run_tools(
             max_workers=max_workers,
             subtasks=subtasks,
             long_task=long_task,
-            supervisor_mode=supervisor_mode,
         )
 
         return [
             TextContent(
                 type="text",
-                text=json.dumps(
-                    {
-                        "job_id": job_id,
-                        "status": "running",
-                        "poll_hint": f"5秒后调 crew_job_status('{job_id}')",
-                        "poll_after_seconds": 5,
-                        "background_agent_prompt": (
-                            f"你是一个后台任务监控 agent。你的职责：\n"
-                            f"1. 每隔 poll_after_seconds 秒调用 crew_job_status('{job_id}')\n"
-                            f"2. 如果返回 status='running'，记录 phase/round，按返回的 poll_after_seconds 等待后重试\n"
-                            f"3. 如果返回 status='unchanged'，按返回的 elapsed 推算等待时间后重试\n"
-                            f"4. 如果返回 status='done'，从 result 中取 crew_id 字段，调用 crew_accept(crew_id) 然后报告最终结果\n"
-                            f"5. 如果返回 status='failed'，必须报告完整的错误信息，包括：\n"
-                            f"   - error 字段的内容\n"
-                            f"   - failure_details 字段的内容（如果存在）\n"
-                            f"   - 详细的错误描述\n"
-                            f"6. 如果返回 status='cancelled'，报告取消原因\n"
-                            f"7. 如果返回 status='done' 但 result.status='max_rounds_exhausted'，检查 failure_details 字段获取失败原因（last_verification.output），报告给主会话以便决定是否修复后重试\n\n"
-                            f"注意：你拥有独立上下文，轮询结果不会污染主会话。持续轮询直到终态。"
-                        ),
-                    },
-                    ensure_ascii=False,
-                ),
+                text=json.dumps(result, ensure_ascii=False),
             )
         ]
 
