@@ -23,8 +23,8 @@ class FakeNativeSession:
     def send(self, **kwargs):
         self.sent.append(kwargs)
         return self.send_result or {
-            "marker": kwargs["turn_marker"],
-            "message": kwargs["message"],
+            "marker": kwargs.get("turn_marker", ""),
+            "message": kwargs.get("message", ""),
         }
 
     def observe(self, **kwargs):
@@ -1339,3 +1339,81 @@ class TestCancelTurn:
         result = adapter.cancel_turn(turn)
         assert result.cancelled is True
         assert cancel.is_set()
+
+
+# ---------------------------------------------------------------------------
+# Task 5: inbox/outbox file-based communication tests
+# ---------------------------------------------------------------------------
+
+
+def test_deliver_turn_writes_inbox_files(tmp_path: Path):
+    """deliver_turn writes task.md to .inbox/ when worker has workspace_path."""
+    work_dir = tmp_path / "workspace"
+    native = FakeNativeSession()
+    adapter = ClaudeCodeTmuxAdapter(native_session=native)
+    adapter.register_worker(
+        WorkerSpec(
+            crew_id="crew-1",
+            worker_id="worker-1",
+            runtime_type="tmux_claude",
+            contract_id="contract-1",
+            workspace_path=str(work_dir),
+        )
+    )
+    turn = TurnEnvelope(
+        crew_id="crew-1",
+        worker_id="worker-1",
+        turn_id="turn-1",
+        round_id="round-1",
+        phase="source",
+        message="Implement the feature",
+        expected_marker="marker-1",
+    )
+
+    result = adapter.deliver_turn(turn)
+
+    assert result.delivered is True
+    inbox_task = work_dir / ".inbox" / "task.md"
+    assert inbox_task.is_file()
+    assert inbox_task.read_text(encoding="utf-8") == "Implement the feature"
+    # Verify work_dir passed to native_session.send
+    assert native.sent[0]["work_dir"] == work_dir
+
+
+def test_watch_turn_detects_outbox_result(tmp_path: Path):
+    """watch_turn yields marker.detected when outbox result.json exists."""
+    work_dir = tmp_path / "workspace"
+    outbox_dir = work_dir / ".outbox"
+    outbox_dir.mkdir(parents=True)
+    result_path = outbox_dir / "result.json"
+    result_path.write_text('{"status": "completed"}', encoding="utf-8")
+
+    native = FakeNativeSession()
+    adapter = ClaudeCodeTmuxAdapter(native_session=native)
+    adapter.register_worker(
+        WorkerSpec(
+            crew_id="crew-1",
+            worker_id="worker-1",
+            runtime_type="tmux_claude",
+            contract_id="contract-1",
+            workspace_path=str(work_dir),
+        )
+    )
+    turn = TurnEnvelope(
+        crew_id="crew-1",
+        worker_id="worker-1",
+        turn_id="turn-1",
+        round_id="round-1",
+        phase="source",
+        message="Implement",
+        expected_marker="marker-1",
+    )
+
+    events = list(adapter.watch_turn(turn))
+
+    assert len(events) == 1
+    assert events[0].type == "marker.detected"
+    assert events[0].payload["marker"] == "marker-1"
+    assert events[0].payload["source"] == "outbox_result"
+    # Should NOT have called observe (no tmux polling)
+    assert len(native.observations) == 0

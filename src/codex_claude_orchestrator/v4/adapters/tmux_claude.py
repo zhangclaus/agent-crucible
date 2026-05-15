@@ -22,6 +22,26 @@ def _non_empty_str(value) -> str:
     return value if isinstance(value, str) and value else ""
 
 
+def _work_dir_for(worker: WorkerSpec | None) -> Path | None:
+    if worker and worker.workspace_path:
+        return Path(worker.workspace_path)
+    return None
+
+
+def _write_inbox_task(work_dir: Path, turn: TurnEnvelope) -> None:
+    inbox_dir = work_dir / ".inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    task_path = inbox_dir / "task.md"
+    task_path.write_text(turn.message, encoding="utf-8")
+
+
+def _check_outbox_result_json(work_dir: Path) -> Path | None:
+    result_path = work_dir / ".outbox" / "result.json"
+    if result_path.is_file():
+        return result_path
+    return None
+
+
 async def _cancelable_sleep(seconds: float, cancel: threading.Event) -> None:
     """Sleep that returns early if cancel event is set."""
     end = time.monotonic() + seconds
@@ -68,11 +88,15 @@ class ClaudeCodeTmuxAdapter:
     def deliver_turn(self, turn: TurnEnvelope) -> DeliveryResult:
         worker = self._workers.get(turn.worker_id)
         terminal_pane = _terminal_pane_for(turn, worker)
+        work_dir = _work_dir_for(worker)
         self._initialize_filesystem_stream(turn, worker)
+        if work_dir is not None:
+            _write_inbox_task(work_dir, turn)
         result = self._native_session.send(
             terminal_pane=terminal_pane,
             message=_compiled_turn_message(turn),
             turn_marker=turn.expected_marker,
+            work_dir=work_dir,
         )
         marker = _non_empty_str(result.get("marker")) or turn.expected_marker
         reason = _non_empty_str(result.get("reason"))
@@ -92,6 +116,24 @@ class ClaudeCodeTmuxAdapter:
         worker = self._workers.get(turn.worker_id)
         terminal_pane = _terminal_pane_for(turn, worker)
         cancel = cancel_event or self._cancel
+
+        # Check for outbox result.json before tmux polling
+        work_dir = _work_dir_for(worker)
+        if work_dir is not None:
+            result_path = _check_outbox_result_json(work_dir)
+            if result_path is not None:
+                marker = _non_empty_str(turn.expected_marker)
+                yield RuntimeEvent(
+                    type="marker.detected",
+                    turn_id=turn.turn_id,
+                    worker_id=turn.worker_id,
+                    payload={
+                        "marker": marker,
+                        "source": "outbox_result",
+                    },
+                )
+                return
+
         yield from self._watch_filesystem_stream(turn, worker, cancel_event=cancel)
 
         max_attempts = 1 + self._poll_retries
@@ -206,6 +248,23 @@ class ClaudeCodeTmuxAdapter:
                 payload={"reason": "cancelled"},
             )
             return
+
+        # Check for outbox result.json before tmux polling
+        work_dir = _work_dir_for(worker)
+        if work_dir is not None:
+            result_path = _check_outbox_result_json(work_dir)
+            if result_path is not None:
+                marker = _non_empty_str(turn.expected_marker)
+                yield RuntimeEvent(
+                    type="marker.detected",
+                    turn_id=turn.turn_id,
+                    worker_id=turn.worker_id,
+                    payload={
+                        "marker": marker,
+                        "source": "outbox_result",
+                    },
+                )
+                return
 
         # Reuse sync filesystem stream
         for event in self._watch_filesystem_stream(turn, worker, cancel_event=cancel):
