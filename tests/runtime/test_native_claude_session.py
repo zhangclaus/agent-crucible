@@ -71,15 +71,18 @@ def test_native_session_starts_claude_in_tmux_with_transcript_and_marker(tmp_pat
     assert attached["attach_command"] == "tmux attach -t crew-1-worker-explorer"
 
 
-def test_native_session_can_open_terminal_attached_to_tmux_session(tmp_path: Path):
+def test_native_session_can_open_terminal_attached_to_tmux_session(tmp_path: Path, monkeypatch):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     runner = FakeTmuxRunner()
-    terminal_calls = []
+    popen_calls = []
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda command, **kwargs: popen_calls.append(command) or None,
+    )
     session = NativeClaudeSession(
         tmux="tmux",
         runner=runner,
-        terminal_runner=lambda command, **kwargs: terminal_calls.append((command, kwargs)) or CompletedProcess(command, 0),
         session_name_factory=lambda worker_id: f"crew-1-{worker_id}",
         open_terminal_on_start=True,
     )
@@ -92,8 +95,8 @@ def test_native_session_can_open_terminal_attached_to_tmux_session(tmp_path: Pat
         transcript_path=tmp_path / "transcript.txt",
     )
 
-    assert terminal_calls
-    assert any("tmux attach -t crew-1-worker-implementer" in part for part in terminal_calls[0][0])
+    assert popen_calls
+    assert any("tmux attach -t crew-1-worker-implementer" in part for part in popen_calls[0])
 
 
 def test_native_session_can_stop_and_prune_crew_tmux_sessions():

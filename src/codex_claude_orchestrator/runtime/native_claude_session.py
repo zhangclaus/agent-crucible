@@ -139,9 +139,13 @@ class NativeClaudeSession:
             "-e",
             "end tell",
         ]
-        result = self._terminal_runner(command, text=True, capture_output=True, check=False)
-        if result.returncode != 0:
-            raise CalledProcessError(result.returncode, result.args, output=result.stdout, stderr=result.stderr)
+        # Fire-and-forget: don't block worker startup waiting for Terminal.app.
+        # Use DEVNULL to avoid hanging on osascript when run from MCP subprocess.
+        import subprocess as _sp
+        try:
+            _sp.Popen(command, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        except Exception:
+            pass
 
     def _initial_prompt(self, repo_root: Path, role: str, instructions: str) -> str:
         return "\n".join(
