@@ -102,6 +102,7 @@ class WorkerPool:
             workspace_mode=allocation.mode,
             workspace_path=allocation.path,
             workspace_allocation_artifact=allocation_artifact,
+            work_dir=start_info.get("work_dir", ""),
             status=WorkerStatus.RUNNING,
             assigned_task_ids=[task.task_id],
         )
@@ -165,6 +166,7 @@ class WorkerPool:
             workspace_mode=allocation.mode,
             workspace_path=allocation.path,
             workspace_allocation_artifact=allocation_artifact,
+            work_dir=start_info.get("work_dir", ""),
             label=contract.label,
             contract_id=contract.contract_id,
             capabilities=contract.required_capabilities,
@@ -566,6 +568,7 @@ class WorkerPool:
             capabilities=payload.get("capabilities", []),
             authority_level=AuthorityLevel(payload.get("authority_level", AuthorityLevel.READONLY.value)),
             workspace_allocation_artifact=payload.get("workspace_allocation_artifact", ""),
+            work_dir=payload.get("work_dir", ""),
             write_scope=payload.get("write_scope", []),
             allowed_tools=payload.get("allowed_tools", []),
             status=WorkerStatus(payload.get("status", WorkerStatus.CREATED.value)),

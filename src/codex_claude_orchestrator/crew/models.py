@@ -351,6 +351,7 @@ class WorkerRecord:
     capabilities: list[str] = field(default_factory=list)
     authority_level: AuthorityLevel = AuthorityLevel.READONLY
     workspace_allocation_artifact: str = ""
+    work_dir: str = ""
     write_scope: list[str] = field(default_factory=list)
     allowed_tools: list[str] = field(default_factory=list)
     status: WorkerStatus = WorkerStatus.CREATED
